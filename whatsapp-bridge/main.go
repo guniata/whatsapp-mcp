@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"reflect"
@@ -19,6 +20,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/mdp/qrterminal"
+	qrcode "github.com/skip2/go-qrcode"
 
 	"bytes"
 
@@ -641,7 +643,7 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 	}
 
 	// Download the media using whatsmeow client
-	mediaData, err := client.Download(downloader)
+	mediaData, err := client.Download(context.Background(), downloader)
 	if err != nil {
 		return false, "", "", "", fmt.Errorf("failed to download media: %v", err)
 	}
@@ -800,14 +802,14 @@ func main() {
 		return
 	}
 
-	container, err := sqlstore.New("sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)
+	container, err := sqlstore.New(context.Background(), "sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)
 	if err != nil {
 		logger.Errorf("Failed to connect to database: %v", err)
 		return
 	}
 
 	// Get device store - This contains session information
-	deviceStore, err := container.GetFirstDevice()
+	deviceStore, err := container.GetFirstDevice(context.Background())
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// No device exists, create one
@@ -867,10 +869,28 @@ func main() {
 		}
 
 		// Print QR code for pairing with phone
+		qrOpened := false
 		for evt := range qrChan {
 			if evt.Event == "code" {
+				// Terminal QR (fallback; often hard to scan due to line spacing)
 				fmt.Println("\nScan this QR code with your WhatsApp app:")
 				qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
+
+				// Render a clean, scannable PNG and open it in Preview.
+				// Rewritten on every rotating code so the image always holds the currently-valid one.
+				qrPath := filepath.Join("store", "qr.png")
+				if err := qrcode.WriteFile(evt.Code, qrcode.Medium, 512, qrPath); err != nil {
+					logger.Warnf("Could not render QR image: %v", err)
+				} else if !qrOpened {
+					fmt.Printf("\nA scannable QR image just opened in Preview. Scan it with:\n")
+					fmt.Printf("  WhatsApp > Settings > Linked Devices > Link a Device\n")
+					if absPath, aerr := filepath.Abs(qrPath); aerr == nil {
+						exec.Command("open", absPath).Start()
+					} else {
+						exec.Command("open", qrPath).Start()
+					}
+					qrOpened = true
+				}
 			} else if evt.Event == "success" {
 				connected <- true
 				break
@@ -973,7 +993,7 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 
 		// If we didn't get a name, try group info
 		if name == "" {
-			groupInfo, err := client.GetGroupInfo(jid)
+			groupInfo, err := client.GetGroupInfo(context.Background(), jid)
 			if err == nil && groupInfo.Name != "" {
 				name = groupInfo.Name
 			} else {
@@ -988,7 +1008,7 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 		logger.Infof("Getting name for contact: %s", chatJID)
 
 		// Just use contact info (full name)
-		contact, err := client.Store.Contacts.GetContact(jid)
+		contact, err := client.Store.Contacts.GetContact(context.Background(), jid)
 		if err == nil && contact.FullName != "" {
 			name = contact.FullName
 		} else if sender != "" {

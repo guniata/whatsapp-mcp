@@ -1,3 +1,13 @@
 *.db
 claude_desktop_config.json
 whatsapp.log
+
+# Local WhatsApp session + message store — PRIVATE, never commit
+whatsapp-bridge/store/
+
+# Compiled bridge binaries (distribute via GitHub Releases, don't commit)
+whatsapp-bridge/whatsapp-bridge-app
+whatsapp-bridge/whatsapp-bridge-app-*
+
+# macOS
+.DS_Store
