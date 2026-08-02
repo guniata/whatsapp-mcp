@@ -32,6 +32,17 @@ func main() {
 		fmt.Println(setupStatusReport())
 	case "uninstall":
 		runUninstall(slices.Contains(os.Args, "--purge"), slices.Contains(os.Args, "--yes"))
+	case "transcribe":
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "usage: whatsapp-assistant transcribe <audio-file>")
+			os.Exit(2)
+		}
+		text, err := transcribeAudioFile(os.Args[2])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(text)
 	default:
 		fmt.Fprintf(os.Stderr, "usage: %s [bridge|mcp|setup|uninstall [--purge] [--yes]]\n", os.Args[0])
 		os.Exit(2)

@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "whatsapp-assistant",
   "display_name": "WhatsApp Assistant",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "description": "Read-only WhatsApp access for Claude: search chats, read messages, get summaries and insights. Cannot send messages.",
   "long_description": "Gives Claude read-only access to your WhatsApp messages via a local background service. On first use, ask Claude to check your WhatsApp status — it will set everything up and show a QR code to scan with your phone. Your messages stay on your computer. This extension has no ability to send messages, only read them.",
   "author": {

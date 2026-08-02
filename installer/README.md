@@ -57,6 +57,7 @@ minutes to finish before expecting Claude to know everything.
 - *"What's the latest with [person's name]?"*
 - *"Did anyone ask me a question in the last two days that I haven't answered?"*
 - *"Show me everything about the delivery from this week."*
+- *"What did that voice message from this morning say?"*
 - *"Every weekday at 8am, give me a summary of anything from yesterday that
   needs my attention."* — Claude can do this on a schedule, so a briefing is
   waiting for you each morning.
@@ -80,8 +81,14 @@ code. It takes ten seconds.
 collected in the background, so anything that arrives while your Mac is asleep
 or shut down gets picked up the next time it wakes.
 
-**Voice notes aren't readable yet.** Claude can tell you a voice message exists
-and who sent it, but can't hear what's in it.
+**Voice notes are turned into text automatically.** You can read what someone
+said, ask for a summary of it, and search voice notes by the words spoken in
+them — just like typed messages. This happens entirely on your own Mac, so the
+recordings are never uploaded anywhere.
+
+The first time you install, your Mac quietly downloads the speech model it
+needs (about 1.5 GB, once). Voice notes start becoming readable shortly after,
+and older ones are worked through in the background.
 
 ---
 

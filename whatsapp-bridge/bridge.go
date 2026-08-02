@@ -76,6 +76,15 @@ func NewMessageStore() (*MessageStore, error) {
 		return nil, fmt.Errorf("failed to create tables: %v", err)
 	}
 
+	// Added after the initial schema: transcribed text for voice notes.
+	// NULL means "not transcribed yet", empty string means "nothing to
+	// transcribe" (silence, or a permanent failure we shouldn't retry).
+	if _, err := db.Exec(`ALTER TABLE messages ADD COLUMN transcription TEXT`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column name") {
+		db.Close()
+		return nil, fmt.Errorf("failed to add transcription column: %v", err)
+	}
+
 	return &MessageStore{db: db}, nil
 }
 
@@ -211,6 +220,16 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 		fileEncSHA256,
 		fileLength,
 	)
+
+	// Fetch voice notes straight away so they can be transcribed without
+	// waiting for someone to ask; WhatsApp's media URLs expire.
+	if err == nil && mediaType == "audio" {
+		go func() {
+			if _, _, _, _, derr := downloadMedia(client, messageStore, msg.Info.ID, chatJID); derr != nil {
+				logger.Warnf("Failed to pre-fetch voice note: %v", derr)
+			}
+		}()
+	}
 
 	if err != nil {
 		logger.Warnf("Failed to store message: %v", err)
@@ -647,6 +666,9 @@ func runBridge() {
 
 	// Start REST API server
 	startRESTServer(client, messageStore, bridgePort())
+
+	// Transcribe voice notes in the background, including any backlog.
+	go messageStore.transcriptionWorker(client, logger)
 
 	// Create a channel to keep the main goroutine alive
 	exitChan := make(chan os.Signal, 1)

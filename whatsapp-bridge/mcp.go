@@ -50,6 +50,10 @@ type msgRow struct {
 	ChatName  *string `json:"chat_name"`
 	MediaType *string `json:"media_type"`
 
+	// Transcription is the spoken text of a voice note, transcribed on this
+	// machine. Nil when the message is not a voice note or has no speech.
+	Transcription *string `json:"transcription,omitempty"`
+
 	SenderName string `json:"sender_name,omitempty"`
 
 	ts time.Time
@@ -106,6 +110,7 @@ func runMCP() {
 		if err != nil {
 			return nil, err
 		}
+		initSchemaFeatures(d)
 		db = d
 		return db, nil
 	}
@@ -419,7 +424,17 @@ func formatMessage(db *sql.DB, m msgRow, showChatInfo bool) string {
 	if m.SenderName == "" {
 		enrichMsg(db, &m)
 	}
-	fmt.Fprintf(&b, "From: %s: %s%s\n", m.SenderName, prefix, resolveMentions(db, m.Content))
+	body := resolveMentions(db, m.Content)
+	// A voice note carries no text of its own; show what was said instead.
+	if m.Transcription != nil {
+		spoken := "🎤 " + *m.Transcription
+		if body != "" {
+			body += " " + spoken
+		} else {
+			body = spoken
+		}
+	}
+	fmt.Fprintf(&b, "From: %s: %s%s\n", m.SenderName, prefix, body)
 	return b.String()
 }
 
@@ -436,17 +451,55 @@ func formatMessagesList(db *sql.DB, msgs []msgRow, showChatInfo bool) string {
 
 // msgSelect is the one message projection every message query uses; its column
 // order is load-bearing for scanMsgRows.
-const msgSelect = `SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type
-	FROM messages JOIN chats ON messages.chat_jid = chats.jid`
+// transcriptionExpr is the transcription column, or a NULL placeholder when
+// reading a store written before voice-note transcription existed (the bridge
+// adds the column on its next start; the MCP must not break in between).
+var transcriptionExpr = "messages.transcription"
 
-// scanMsgRows scans rows of shape (timestamp, sender, chat_name, content, is_from_me, chat_jid, id, media_type).
+func buildMsgSelect() string {
+	return `SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type, ` +
+		transcriptionExpr + `
+		FROM messages JOIN chats ON messages.chat_jid = chats.jid`
+}
+
+var msgSelect = buildMsgSelect()
+
+// initSchemaFeatures adapts queries to the store's actual schema. Must run
+// before any message query.
+func initSchemaFeatures(db *sql.DB) {
+	rows, err := db.Query("PRAGMA table_info(messages)")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return
+		}
+		if name == "transcription" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		transcriptionExpr = "NULL"
+	}
+	msgSelect = buildMsgSelect()
+}
+
+// scanMsgRows scans rows of shape (timestamp, sender, chat_name, content, is_from_me, chat_jid, id, media_type, transcription).
 func scanMsgRows(rows *sql.Rows) ([]msgRow, error) {
 	var out []msgRow
 	for rows.Next() {
 		var m msgRow
 		var ts time.Time
-		var chatName, mediaType, content sql.NullString
-		if err := rows.Scan(&ts, &m.Sender, &chatName, &content, &m.IsFromMe, &m.ChatJID, &m.ID, &mediaType); err != nil {
+		var chatName, mediaType, content, transcription sql.NullString
+		if err := rows.Scan(&ts, &m.Sender, &chatName, &content, &m.IsFromMe, &m.ChatJID, &m.ID, &mediaType, &transcription); err != nil {
 			return nil, err
 		}
 		m.ts = ts
@@ -457,6 +510,9 @@ func scanMsgRows(rows *sql.Rows) ([]msgRow, error) {
 		}
 		if mediaType.Valid && mediaType.String != "" {
 			m.MediaType = &mediaType.String
+		}
+		if transcription.Valid && transcription.String != "" {
+			m.Transcription = &transcription.String
 		}
 		out = append(out, m)
 	}
@@ -699,8 +755,9 @@ var mcpTools = []toolDef{
 				params = append(params, p.ChatJID)
 			}
 			if p.Query != "" {
-				where = append(where, "LOWER(messages.content) LIKE LOWER(?)")
-				params = append(params, "%"+p.Query+"%")
+				// Search spoken words in voice notes too, not just typed text.
+				where = append(where, "(LOWER(messages.content) LIKE LOWER(?) OR LOWER(COALESCE("+transcriptionExpr+", '')) LIKE LOWER(?))")
+				params = append(params, "%"+p.Query+"%", "%"+p.Query+"%")
 			}
 			clause := ""
 			if len(where) > 0 {
