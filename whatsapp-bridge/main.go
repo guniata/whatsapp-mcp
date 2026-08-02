@@ -1,16 +1,21 @@
-// whatsapp-assistant: one binary, two modes.
+// whatsapp-assistant: one binary, several modes.
 //
-//	whatsapp-assistant bridge   long-running daemon holding the WhatsApp link,
-//	                            writing messages to the local SQLite store
-//	whatsapp-assistant mcp      read-only MCP stdio server for Claude Desktop
+//	whatsapp-assistant bridge      long-running daemon holding the WhatsApp link,
+//	                               writing messages to the local SQLite store
+//	whatsapp-assistant mcp         read-only MCP stdio server for Claude Desktop
+//	whatsapp-assistant setup       install/repair the background service, show
+//	                               the pairing QR, and report status
+//	whatsapp-assistant uninstall   remove the service and installed files
+//	                               (--purge also deletes the message store)
 //
-// READ-ONLY BUILD: the MCP mode exposes no send tools at all; sending only
-// exists in the bridge's local REST API used by legacy tooling.
+// READ-ONLY BUILD: this binary cannot send WhatsApp messages. The MCP mode
+// exposes read tools only, and no send endpoint exists anywhere in the bridge.
 package main
 
 import (
 	"fmt"
 	"os"
+	"slices"
 )
 
 func main() {
@@ -25,8 +30,10 @@ func main() {
 		runMCP()
 	case "setup":
 		fmt.Println(setupStatusReport())
+	case "uninstall":
+		runUninstall(slices.Contains(os.Args, "--purge"), slices.Contains(os.Args, "--yes"))
 	default:
-		fmt.Fprintf(os.Stderr, "usage: %s [bridge|mcp]\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "usage: %s [bridge|mcp|setup|uninstall [--purge] [--yes]]\n", os.Args[0])
 		os.Exit(2)
 	}
 }
