@@ -22,7 +22,7 @@ import (
 // self-install compares it against the already-installed binary so that an
 // older copy — an out-of-date Claude extension, say — never overwrites a newer
 // background service.
-const appVersion = "1.2.1"
+const appVersion = "1.3.0"
 
 func main() {
 	mode := "bridge"

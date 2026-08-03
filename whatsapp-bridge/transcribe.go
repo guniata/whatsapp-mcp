@@ -268,6 +268,11 @@ func transcribeAudioFile(oggPath string) (string, error) {
 		"-f", tmpPath,
 		"-l", lang,
 		"-nt", "-np",
+		// Discard segments whisper itself judges to contain no speech, and
+		// suppress non-speech tokens. Both reduce invented text on near-silent
+		// clips before the repetition check below has to catch it.
+		"-nth", "0.6",
+		"-sns",
 	)
 	// ggml has Homebrew's Cellar path compiled in as its backend directory and
 	// does NOT fall back to searching beside the library or the executable
@@ -289,7 +294,41 @@ func transcribeAudioFile(oggPath string) (string, error) {
 	if text == "" || (strings.HasPrefix(text, "[") && strings.HasSuffix(text, "]")) {
 		return "", nil
 	}
+	if isHallucinatedTranscript(text) {
+		return "", nil
+	}
 	return text, nil
+}
+
+// isHallucinatedTranscript detects Whisper's signature output for clips with no
+// speech: one short phrase repeated over and over ("Thank you. Thank you. …").
+// Storing nothing is recoverable; storing invented words is not, because
+// nothing downstream can tell them apart from a real transcript.
+func isHallucinatedTranscript(text string) bool {
+	fields := strings.FieldsFunc(text, func(r rune) bool {
+		return r == '.' || r == '!' || r == '?' || r == '\n'
+	})
+	var phrases []string
+	for _, f := range fields {
+		if f = strings.TrimSpace(f); f != "" {
+			phrases = append(phrases, strings.ToLower(f))
+		}
+	}
+	if len(phrases) < 3 {
+		return false
+	}
+	counts := map[string]int{}
+	for _, p := range phrases {
+		counts[p]++
+	}
+	// Distinct speech does not consist of one phrase three-quarters of the time.
+	most := 0
+	for _, c := range counts {
+		if c > most {
+			most = c
+		}
+	}
+	return most >= 3 && float64(most)/float64(len(phrases)) >= 0.75
 }
 
 // bundledCPUBackend returns the ggml CPU backend shipped alongside our whisper
@@ -403,7 +442,7 @@ func (store *MessageStore) transcribeMessage(client *whatsmeow.Client, messageID
 		return "", err
 	}
 
-	path := filepath.Join(storeDir(), strings.ReplaceAll(chatJID, ":", "_"), filepath.Base(filename))
+	path := filepath.Join(storeDir(), strings.ReplaceAll(chatJID, ":", "_"), mediaFileName(messageID, filename))
 	if _, err := os.Stat(path); err != nil {
 		// Not fetched yet (or fetched before we stored voice notes eagerly).
 		if client == nil {

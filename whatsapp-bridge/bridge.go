@@ -370,14 +370,12 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 		return false, "", "", "", fmt.Errorf("failed to create chat directory: %v", err)
 	}
 
-	// Generate a local path for the file. The filename originates from the
-	// remote sender, so keep only its base name and refuse anything that would
-	// escape the store directory.
-	filename = filepath.Base(filename)
-	if filename == "." || filename == ".." || filename == "/" || filename == "" {
-		filename = "media_" + time.Now().Format("20060102_150405")
-	}
-	localPath = filepath.Join(chatDir, filename)
+	// Name the file after the message ID, never after the stored filename.
+	// Stored filenames are generated from time.Now() at receive time, so a
+	// history sync gives hundreds of messages the same name — they would then
+	// share one file on disk, and every one of them would return (and be
+	// transcribed as) whichever message downloaded first.
+	localPath = filepath.Join(chatDir, mediaFileName(messageID, filename))
 
 	// Get absolute path
 	absPath, err := filepath.Abs(localPath)
@@ -442,6 +440,28 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 
 	fmt.Printf("Successfully downloaded %s media to %s (%d bytes)\n", mediaType, absPath, len(mediaData))
 	return true, mediaType, filename, absPath, nil
+}
+
+// mediaFileName builds a per-message filename that cannot collide with another
+// message's. The extension is taken from the sender-supplied name (for MIME
+// detection) but nothing else from it is trusted.
+func mediaFileName(messageID, storedName string) string {
+	ext := strings.ToLower(filepath.Ext(filepath.Base(storedName)))
+	if len(ext) > 8 || strings.ContainsAny(ext, `/\:`) {
+		ext = ""
+	}
+	safe := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		default:
+			return '_'
+		}
+	}, messageID)
+	if safe == "" {
+		safe = "media"
+	}
+	return safe + ext
 }
 
 // Extract direct path from a WhatsApp media URL

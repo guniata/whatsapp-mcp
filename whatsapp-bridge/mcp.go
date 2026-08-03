@@ -364,6 +364,18 @@ func senderForms(raw string) []string {
 	return forms
 }
 
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func placeholders(n int) string {
 	return strings.TrimRight(strings.Repeat("?,", n), ",")
 }
@@ -378,12 +390,18 @@ func resolveMentions(db *sql.DB, content string) string {
 	})
 }
 
-// enrichMsg fills the human-readable sender_name on a scanned message.
+// enrichMsg fills the human-readable sender_name on a scanned message, and
+// repairs a chat name that is only a number (see enrichChat).
 func enrichMsg(db *sql.DB, m *msgRow) {
 	if m.IsFromMe {
 		m.SenderName = "Me"
 	} else {
 		m.SenderName = getSenderName(db, m.Sender)
+	}
+	if !strings.HasSuffix(m.ChatJID, "@g.us") && (m.ChatName == nil || isAllDigits(*m.ChatName)) {
+		if name, ok := resolveName(db, m.ChatJID); ok {
+			m.ChatName = &name
+		}
 	}
 }
 
@@ -394,6 +412,14 @@ func enrichMsgs(db *sql.DB, msgs []msgRow) {
 }
 
 func enrichChat(db *sql.DB, c *chatRow) {
+	// A 1:1 chat whose stored name is just a number carries no information —
+	// and it is often a *different* number from the JID, which is worse than
+	// useless. Resolve it the same way sender names are resolved.
+	if !strings.HasSuffix(c.JID, "@g.us") && (c.Name == nil || isAllDigits(*c.Name)) {
+		if name, ok := resolveName(db, c.JID); ok {
+			c.Name = &name
+		}
+	}
 	if c.LastSender == nil {
 		return
 	}
@@ -686,7 +712,9 @@ var mcpTools = []toolDef{
 			"before":{"type":"string","description":"Optional ISO-8601 formatted string to only return messages before this date"},
 			"sender_phone_number":{"type":"string","description":"Optional phone number to filter messages by sender"},
 			"chat_jid":{"type":"string","description":"Optional chat JID to filter messages by chat"},
-			"query":{"type":"string","description":"Optional search term to filter messages by content"},
+			"query":{"type":"string","description":"Optional search term to filter messages by content (also searches voice-note transcripts)"},
+			"media_type":{"type":"string","description":"Optional filter by kind of message: \"audio\" (voice notes), \"image\", \"video\", \"document\", or \"text\" for messages with no attachment","enum":["audio","image","video","document","text"]},
+			"from_me":{"type":"boolean","description":"Optional: true for only messages you sent, false for only messages you received"},
 			"limit":{"type":"integer","description":"Maximum number of messages to return (default 20)"},
 			"page":{"type":"integer","description":"Page number for pagination (default 0)"},
 			"include_context":{"type":"boolean","description":"Whether to include messages before and after matches (default true)"},
@@ -700,6 +728,8 @@ var mcpTools = []toolDef{
 				SenderPhoneNumber string `json:"sender_phone_number"`
 				ChatJID           string `json:"chat_jid"`
 				Query             string `json:"query"`
+				MediaType         string `json:"media_type"`
+				FromMe            *bool  `json:"from_me"`
 				Limit             int    `json:"limit"`
 				Page              int    `json:"page"`
 				IncludeContext    *bool  `json:"include_context"`
@@ -753,6 +783,18 @@ var mcpTools = []toolDef{
 			if p.ChatJID != "" {
 				where = append(where, "messages.chat_jid = ?")
 				params = append(params, p.ChatJID)
+			}
+			if p.MediaType != "" {
+				if strings.EqualFold(p.MediaType, "text") {
+					where = append(where, "COALESCE(messages.media_type, '') = ''")
+				} else {
+					where = append(where, "LOWER(messages.media_type) = LOWER(?)")
+					params = append(params, p.MediaType)
+				}
+			}
+			if p.FromMe != nil {
+				where = append(where, "messages.is_from_me = ?")
+				params = append(params, *p.FromMe)
 			}
 			if p.Query != "" {
 				// Search spoken words in voice notes too, not just typed text.
@@ -818,10 +860,14 @@ var mcpTools = []toolDef{
 				FROM chats
 				LEFT JOIN messages ON chats.jid = messages.chat_jid AND chats.last_message_time = messages.timestamp`
 			var params []any
+			// status@broadcast is the Status feed, not a conversation; it would
+			// otherwise take a slot near the top of every recent-chats query.
+			where := []string{"chats.jid != 'status@broadcast'"}
 			if p.Query != "" {
-				q += " WHERE (LOWER(chats.name) LIKE LOWER(?) OR chats.jid LIKE ?)"
+				where = append(where, "(LOWER(chats.name) LIKE LOWER(?) OR chats.jid LIKE ?)")
 				params = append(params, "%"+p.Query+"%", "%"+p.Query+"%")
 			}
+			q += " WHERE " + strings.Join(where, " AND ")
 			if p.SortBy == "name" {
 				q += " ORDER BY chats.name"
 			} else {
