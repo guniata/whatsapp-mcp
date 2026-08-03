@@ -18,6 +18,12 @@ import (
 	"slices"
 )
 
+// appVersion must be bumped in step with installer/mcpb/manifest.json. The
+// self-install compares it against the already-installed binary so that an
+// older copy — an out-of-date Claude extension, say — never overwrites a newer
+// background service.
+const appVersion = "1.2.0"
+
 func main() {
 	mode := "bridge"
 	if len(os.Args) > 1 {
@@ -30,6 +36,8 @@ func main() {
 		runMCP()
 	case "setup":
 		fmt.Println(setupStatusReport())
+	case "version":
+		fmt.Println(appVersion)
 	case "uninstall":
 		runUninstall(slices.Contains(os.Args, "--purge"), slices.Contains(os.Args, "--yes"))
 	case "transcribe":

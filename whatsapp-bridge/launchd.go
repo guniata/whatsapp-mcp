@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -113,6 +114,41 @@ func sameFileContent(a, b string) bool {
 	return bytes.Equal(ha, hb)
 }
 
+// installedVersion asks the already-installed binary what version it is.
+// Versions before this mechanism existed have no "version" mode and report
+// "0.0.0", so they are always safe to replace.
+func installedVersion() string {
+	out, err := exec.Command(installedBinPath(), "version").Output()
+	if err != nil {
+		return "0.0.0"
+	}
+	v := strings.TrimSpace(string(out))
+	if v == "" {
+		return "0.0.0"
+	}
+	return v
+}
+
+// compareVersions returns >0 if a is newer than b, <0 if older, 0 if equal.
+// Unparseable components sort as 0, which keeps a malformed version from
+// blocking an upgrade.
+func compareVersions(a, b string) int {
+	partsA, partsB := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < 3; i++ {
+		var x, y int
+		if i < len(partsA) {
+			x, _ = strconv.Atoi(strings.TrimSpace(partsA[i]))
+		}
+		if i < len(partsB) {
+			y, _ = strconv.Atoi(strings.TrimSpace(partsB[i]))
+		}
+		if x != y {
+			return x - y
+		}
+	}
+	return 0
+}
+
 func copyFile(src, dst string, perm os.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -183,13 +219,20 @@ func ensureBridgeService() (string, error) {
 	self, _ = filepath.EvalSymlinks(self)
 	binaryChanged := false
 	if self != installedBinPath() && !sameFileContent(self, installedBinPath()) {
-		// Stop the service before replacing the binary it runs.
-		exec.Command("launchctl", "bootout", launchdDomain()+"/"+launchdLabel).Run()
-		if err := copyFile(self, installedBinPath(), 0755); err != nil {
-			return "", fmt.Errorf("failed to install binary: %v", err)
+		// Never let an older copy replace a newer one: Claude may still be
+		// running a stale extension, and its MCP process runs this same code.
+		if installed := installedVersion(); compareVersions(installed, appVersion) > 0 {
+			actions = append(actions, fmt.Sprintf(
+				"kept the newer background service already installed (%s; this copy is %s)", installed, appVersion))
+		} else {
+			// Stop the service before replacing the binary it runs.
+			exec.Command("launchctl", "bootout", launchdDomain()+"/"+launchdLabel).Run()
+			if err := copyFile(self, installedBinPath(), 0755); err != nil {
+				return "", fmt.Errorf("failed to install binary: %v", err)
+			}
+			binaryChanged = true
+			actions = append(actions, "installed bridge binary")
 		}
-		binaryChanged = true
-		actions = append(actions, "installed bridge binary")
 	}
 
 	// Write the launchd plist if missing or outdated.

@@ -262,12 +262,18 @@ func transcribeAudioFile(oggPath string) (string, error) {
 	if lang == "" {
 		lang = "auto"
 	}
-	cmd := exec.Command(whisperBinary(),
+	bin := whisperBinary()
+	cmd := exec.Command(bin,
 		"-m", whisperModelPath(),
 		"-f", tmpPath,
 		"-l", lang,
 		"-nt", "-np",
 	)
+	// ggml has a build-time backend directory compiled in (Homebrew's Cellar).
+	// On a machine without Homebrew that path is absent and ggml falls back to
+	// searching beside libggml, which is why bundle-whisper.sh copies the
+	// backend .so files into the same lib/ directory. GGML_BACKEND_PATH is not
+	// usable here: it names a single .so, not a directory.
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
