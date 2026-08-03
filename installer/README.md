@@ -11,10 +11,21 @@ can be switched on.
 
 ## What you need first
 
-- A Mac
+- A Mac with an **Apple chip** (see below)
 - The **Claude** app installed and signed in — download it from
   [claude.ai/download](https://claude.ai/download) if you don't have it
 - Your phone with WhatsApp on it, nearby
+
+### Check your Mac has an Apple chip
+
+Click the **** menu in the top-left corner → **About This Mac**, and look at
+the top line:
+
+- **Chip: Apple M1 / M2 / M3 / M4 …** → you're good, carry on.
+- **Processor: … Intel …** → this version won't run on your Mac. Let me know
+  and I'll send you a different build.
+
+(Any Mac bought from late 2020 onwards has an Apple chip.)
 
 ---
 
