@@ -81,54 +81,93 @@ func transcriptionAvailable() (bool, string) {
 	return true, ""
 }
 
-var modelDownloadOnce sync.Once
+var modelDownloadMu sync.Mutex
+
+func placeholdersN(n int) string {
+	return strings.TrimRight(strings.Repeat("?,", n), ",")
+}
+
+// looksLikeGGMLModel checks the file really is a ggml model rather than, say, a
+// captive-portal login page served with HTTP 200. Without this, one bad
+// download is renamed into place and treated as valid forever.
+func looksLikeGGMLModel(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil || st.Size() < 100*1024*1024 {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	magic := make([]byte, 4)
+	if _, err := io.ReadFull(f, magic); err != nil {
+		return false
+	}
+	return string(magic) == "ggml" || string(magic) == "lmgg"
+}
 
 // ensureWhisperModel downloads the speech model on first use. It is ~1.5 GB, so
 // it cannot ship inside the extension; the download runs once, in the
 // background, and transcription simply starts working when it lands.
-func ensureWhisperModel(logger waLog.Logger) {
-	modelDownloadOnce.Do(func() {
-		if _, err := os.Stat(whisperModelPath()); err == nil {
-			return
-		}
-		if err := os.MkdirAll(modelsDir(), 0755); err != nil {
-			logger.Warnf("cannot create models directory: %v", err)
-			return
-		}
-		tmp := whisperModelPath() + ".part"
-		os.Remove(tmp)
+func ensureWhisperModel(logger waLog.Logger) bool {
+	modelDownloadMu.Lock()
+	defer modelDownloadMu.Unlock()
 
-		fmt.Println("Downloading the speech model for voice-note transcription (about 1.5 GB, one time)…")
-		resp, err := http.Get(whisperModelURL)
-		if err != nil {
-			logger.Warnf("speech model download failed: %v", err)
-			return
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			logger.Warnf("speech model download failed: HTTP %d", resp.StatusCode)
-			return
-		}
-		f, err := os.Create(tmp)
-		if err != nil {
-			logger.Warnf("cannot write speech model: %v", err)
-			return
-		}
-		n, err := io.Copy(f, resp.Body)
-		f.Close()
-		if err != nil {
-			os.Remove(tmp)
-			logger.Warnf("speech model download interrupted: %v", err)
-			return
-		}
-		// Rename only after a complete download so a partial file is never
-		// mistaken for a usable model.
-		if err := os.Rename(tmp, whisperModelPath()); err != nil {
-			logger.Warnf("cannot finalise speech model: %v", err)
-			return
-		}
-		fmt.Printf("Speech model ready (%d MB). Voice notes will now be transcribed.\n", n/(1024*1024))
-	})
+	if looksLikeGGMLModel(whisperModelPath()) {
+		return true
+	}
+	// A file that exists but is not a model (truncated, or an error page saved
+	// with HTTP 200) must be discarded, or it would be trusted forever.
+	if _, err := os.Stat(whisperModelPath()); err == nil {
+		logger.Warnf("speech model at %s is not a valid model; re-downloading", whisperModelPath())
+		os.Remove(whisperModelPath())
+	}
+	if err := os.MkdirAll(modelsDir(), 0755); err != nil {
+		logger.Warnf("cannot create models directory: %v", err)
+		return false
+	}
+	tmp := whisperModelPath() + ".part"
+	os.Remove(tmp)
+
+	fmt.Println("Downloading the speech model for voice-note transcription (about 1.5 GB, one time)…")
+	client := &http.Client{Timeout: 2 * time.Hour}
+	resp, err := client.Get(whisperModelURL)
+	if err != nil {
+		logger.Warnf("speech model download failed: %v", err)
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		logger.Warnf("speech model download failed: HTTP %d", resp.StatusCode)
+		return false
+	}
+	f, err := os.Create(tmp)
+	if err != nil {
+		logger.Warnf("cannot write speech model: %v", err)
+		return false
+	}
+	// Cap the transfer so a misbehaving endpoint cannot fill the disk.
+	n, err := io.Copy(f, io.LimitReader(resp.Body, 4<<30))
+	f.Close()
+	if err != nil {
+		os.Remove(tmp)
+		logger.Warnf("speech model download interrupted: %v", err)
+		return false
+	}
+	if !looksLikeGGMLModel(tmp) {
+		os.Remove(tmp)
+		logger.Warnf("downloaded speech model failed its integrity check (%d bytes); will retry later", n)
+		return false
+	}
+	// Rename only after a complete, verified download so a partial or bogus
+	// file is never mistaken for a usable model.
+	if err := os.Rename(tmp, whisperModelPath()); err != nil {
+		logger.Warnf("cannot finalise speech model: %v", err)
+		return false
+	}
+	fmt.Printf("Speech model ready (%d MB). Voice notes will now be transcribed.\n", n/(1024*1024))
+	return true
 }
 
 // decodeOggOpusToPCM decodes an Ogg/Opus file to mono 16 kHz 16-bit samples.
@@ -314,21 +353,27 @@ func isHallucinatedTranscript(text string) bool {
 			phrases = append(phrases, strings.ToLower(f))
 		}
 	}
-	if len(phrases) < 3 {
+	if len(phrases) < 4 {
 		return false
 	}
 	counts := map[string]int{}
 	for _, p := range phrases {
 		counts[p]++
 	}
-	// Distinct speech does not consist of one phrase three-quarters of the time.
-	most := 0
-	for _, c := range counts {
+	most, mostPhrase := 0, ""
+	for p, c := range counts {
 		if c > most {
-			most = c
+			most, mostPhrase = c, p
 		}
 	}
-	return most >= 3 && float64(most)/float64(len(phrases)) >= 0.75
+	// Only treat it as fabricated when a *short* phrase dominates almost the
+	// whole transcript. Real speech can legitimately repeat ("No! No! No!"), so
+	// the bar is deliberately high: discarding a real message is unrecoverable,
+	// because "" is the sentinel for "nothing was said".
+	if len(mostPhrase) > 40 {
+		return false
+	}
+	return most >= 4 && float64(most)/float64(len(phrases)) > 0.8
 }
 
 // bundledCPUBackend returns the ggml CPU backend shipped alongside our whisper
@@ -366,10 +411,10 @@ func (store *MessageStore) transcriptionWorker(client *whatsmeow.Client, logger 
 		fmt.Println("Voice-note transcription is off: the speech-to-text engine is not installed.")
 		return
 	}
-	ensureWhisperModel(logger)
-	if ok, why := transcriptionAvailable(); !ok {
-		fmt.Printf("Voice-note transcription is off: %s\n", why)
-		return
+	// The bridge starts at login, often before the network is up, so keep
+	// retrying rather than disabling transcription for the process lifetime.
+	for !ensureWhisperModel(logger) {
+		time.Sleep(5 * time.Minute)
 	}
 	fmt.Println("Voice-note transcription is on.")
 
@@ -388,10 +433,26 @@ func (store *MessageStore) transcriptionWorker(client *whatsmeow.Client, logger 
 // transcribePass transcribes up to limit pending voice notes, returning how
 // many it completed.
 func (store *MessageStore) transcribePass(client *whatsmeow.Client, logger waLog.Logger, failed map[string]bool, limit int) int {
-	rows, err := store.db.Query(`
-		SELECT id, chat_jid FROM messages
-		WHERE media_type = 'audio' AND transcription IS NULL
-		ORDER BY timestamp DESC LIMIT ?`, limit*4)
+	// Exclude already-failed messages in SQL, not after the fact. Failures stay
+	// NULL in the database (so a restart retries them), and a fixed LIMIT would
+	// otherwise keep returning the same unrecoverable rows forever while every
+	// older voice note behind them is never even looked at.
+	q := `SELECT id, chat_jid FROM messages WHERE media_type = 'audio' AND transcription IS NULL`
+	params := []any{}
+	if len(failed) > 0 {
+		keys := make([]string, 0, len(failed))
+		for k := range failed {
+			keys = append(keys, k)
+		}
+		q += " AND (chat_jid || '/' || id) NOT IN (" + placeholdersN(len(keys)) + ")"
+		for _, k := range keys {
+			params = append(params, k)
+		}
+	}
+	q += " ORDER BY timestamp DESC LIMIT ?"
+	params = append(params, limit)
+
+	rows, err := store.db.Query(q, params...)
 	if err != nil {
 		logger.Warnf("transcription query failed: %v", err)
 		return 0
@@ -403,13 +464,7 @@ func (store *MessageStore) transcribePass(client *whatsmeow.Client, logger waLog
 		if err := rows.Scan(&j.id, &j.chatJID); err != nil {
 			continue
 		}
-		if failed[j.chatJID+"/"+j.id] {
-			continue
-		}
 		jobs = append(jobs, j)
-		if len(jobs) >= limit {
-			break
-		}
 	}
 	rows.Close()
 

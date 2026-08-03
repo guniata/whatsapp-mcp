@@ -7,6 +7,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"fmt"
@@ -118,7 +119,11 @@ func sameFileContent(a, b string) bool {
 // Versions before this mechanism existed have no "version" mode and report
 // "0.0.0", so they are always safe to replace.
 func installedVersion() string {
-	out, err := exec.Command(installedBinPath(), "version").Output()
+	// Bounded: this runs while holding the setup lock, and a hung binary would
+	// otherwise stall every MCP request behind it.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, installedBinPath(), "version").Output()
 	if err != nil {
 		return "0.0.0"
 	}
@@ -253,18 +258,30 @@ func ensureBridgeService() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("cannot determine own path: %v", err)
 	}
-	self, _ = filepath.EvalSymlinks(self)
+	// EvalSymlinks returns "" on failure; keeping the original path is far
+	// better than proceeding with an empty one.
+	if resolved, err := filepath.EvalSymlinks(self); err == nil && resolved != "" {
+		self = resolved
+	}
 	binaryChanged := false
+	weAreNewer := true
 	if self != installedBinPath() && !sameFileContent(self, installedBinPath()) {
 		// Never let an older copy replace a newer one: Claude may still be
 		// running a stale extension, and its MCP process runs this same code.
 		if installed := installedVersion(); compareVersions(installed, appVersion) > 0 {
+			weAreNewer = false
 			actions = append(actions, fmt.Sprintf(
 				"kept the newer background service already installed (%s; this copy is %s)", installed, appVersion))
 		} else {
-			// Stop the service before replacing the binary it runs.
+			// Stage the new binary first: stopping the service before knowing
+			// the copy can succeed risks leaving the bridge permanently down.
+			staged := installedBinPath() + ".staged"
+			if err := copyFile(self, staged, 0755); err != nil {
+				return "", fmt.Errorf("failed to install binary: %v", err)
+			}
 			exec.Command("launchctl", "bootout", launchdDomain()+"/"+launchdLabel).Run()
-			if err := copyFile(self, installedBinPath(), 0755); err != nil {
+			if err := os.Rename(staged, installedBinPath()); err != nil {
+				os.Remove(staged)
 				return "", fmt.Errorf("failed to install binary: %v", err)
 			}
 			binaryChanged = true
@@ -274,9 +291,13 @@ func ensureBridgeService() (string, error) {
 
 	// The speech engine ships in the Claude extension directory, but the bridge
 	// runs from binDir(), so copy it across — otherwise transcription silently
-	// never starts on a machine without a system whisper install.
-	if err := installSpeechEngine(filepath.Dir(self)); err != nil {
-		actions = append(actions, "note: speech engine not installed ("+err.Error()+")")
+	// never starts on a machine without a system whisper install. Skipped when
+	// a newer install is present, so an old extension cannot downgrade the
+	// engine underneath a newer bridge.
+	if weAreNewer {
+		if err := installSpeechEngine(filepath.Dir(self)); err != nil {
+			actions = append(actions, "note: speech engine not installed ("+err.Error()+")")
+		}
 	}
 
 	// Write the launchd plist if missing or outdated.

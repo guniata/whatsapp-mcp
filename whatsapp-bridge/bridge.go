@@ -110,10 +110,19 @@ func (store *MessageStore) StoreMessage(id, chatJID, sender, content string, tim
 		return nil
 	}
 
+	// Upsert rather than INSERT OR REPLACE: REPLACE deletes the existing row
+	// and inserts a fresh one, which would blank the transcription column every
+	// time a history sync re-delivers an already-transcribed voice note.
 	_, err := store.db.Exec(
-		`INSERT OR REPLACE INTO messages 
-		(id, chat_jid, sender, content, timestamp, is_from_me, media_type, filename, url, media_key, file_sha256, file_enc_sha256, file_length) 
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO messages
+		(id, chat_jid, sender, content, timestamp, is_from_me, media_type, filename, url, media_key, file_sha256, file_enc_sha256, file_length)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id, chat_jid) DO UPDATE SET
+			sender=excluded.sender, content=excluded.content, timestamp=excluded.timestamp,
+			is_from_me=excluded.is_from_me, media_type=excluded.media_type,
+			filename=excluded.filename, url=excluded.url, media_key=excluded.media_key,
+			file_sha256=excluded.file_sha256, file_enc_sha256=excluded.file_enc_sha256,
+			file_length=excluded.file_length`,
 		id, chatJID, sender, content, timestamp, isFromMe, mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength,
 	)
 	return err
@@ -433,8 +442,15 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 		return false, "", "", "", fmt.Errorf("failed to download media: %v", err)
 	}
 
-	// Save the downloaded media to file
-	if err := os.WriteFile(localPath, mediaData, 0644); err != nil {
+	// Write via a unique temp file and rename: the same message can be fetched
+	// concurrently (arrival pre-fetch plus the transcription worker), and a
+	// truncating in-place write lets a reader observe a half-written file.
+	tmpPath := fmt.Sprintf("%s.part.%d", localPath, os.Getpid())
+	if err := os.WriteFile(tmpPath, mediaData, 0644); err != nil {
+		return false, "", "", "", fmt.Errorf("failed to save media file: %v", err)
+	}
+	if err := os.Rename(tmpPath, localPath); err != nil {
+		os.Remove(tmpPath)
 		return false, "", "", "", fmt.Errorf("failed to save media file: %v", err)
 	}
 
@@ -446,8 +462,16 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 // message's. The extension is taken from the sender-supplied name (for MIME
 // detection) but nothing else from it is trusted.
 func mediaFileName(messageID, storedName string) string {
+	// The extension comes from the remote sender, so allow only a known-safe
+	// set. Otherwise a document named "note.ogg.command" would be saved as an
+	// executable-looking file that download_media then reports as media.
 	ext := strings.ToLower(filepath.Ext(filepath.Base(storedName)))
-	if len(ext) > 8 || strings.ContainsAny(ext, `/\:`) {
+	switch ext {
+	case ".ogg", ".opus", ".mp3", ".m4a", ".wav", ".aac",
+		".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic",
+		".mp4", ".mov", ".avi", ".webm",
+		".pdf", ".txt", ".csv", ".zip", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx":
+	default:
 		ext = ""
 	}
 	safe := strings.Map(func(r rune) rune {

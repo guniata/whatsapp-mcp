@@ -21,7 +21,14 @@ func appHome() string {
 }
 
 func storeDir() string {
-	return filepath.Join(appHome(), "store")
+	// Absolute: the media download path-containment check compares this against
+	// an absolute path, and a relative WHATSAPP_ASSISTANT_HOME would make every
+	// download fail closed.
+	dir := filepath.Join(appHome(), "store")
+	if abs, err := filepath.Abs(dir); err == nil {
+		return abs
+	}
+	return dir
 }
 
 func messagesDBPath() string {

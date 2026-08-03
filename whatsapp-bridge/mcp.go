@@ -195,6 +195,13 @@ func callMCPTool(openDB func() (*sql.DB, error), name string, args json.RawMessa
 			if err != nil {
 				return errResult(err)
 			}
+			// The bridge adds the transcription column on its first run, which
+			// can happen after this process opened the store. Without
+			// re-checking, transcripts would stay invisible for the whole
+			// session and the user would have no reason to restart Claude.
+			if transcriptionExpr == "NULL" {
+				initSchemaFeatures(db)
+			}
 		}
 		result, err := t.handler(db, args)
 		if err != nil {
