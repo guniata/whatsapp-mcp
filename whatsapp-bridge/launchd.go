@@ -149,6 +149,43 @@ func compareVersions(a, b string) int {
 	return 0
 }
 
+// installSpeechEngine copies whisper-cli and its libraries from srcDir into
+// binDir so the launchd-run bridge can find them. A no-op when the source has
+// no bundled engine (developer builds rely on a system install).
+func installSpeechEngine(srcDir string) error {
+	srcBin := filepath.Join(srcDir, "whisper-cli")
+	if st, err := os.Stat(srcBin); err != nil || st.IsDir() {
+		return nil // nothing bundled; not an error
+	}
+	dstBin := filepath.Join(binDir(), "whisper-cli")
+	if !sameFileContent(srcBin, dstBin) {
+		if err := copyFile(srcBin, dstBin, 0755); err != nil {
+			return err
+		}
+	}
+	srcLib, dstLib := filepath.Join(srcDir, "lib"), filepath.Join(binDir(), "lib")
+	entries, err := os.ReadDir(srcLib)
+	if err != nil {
+		return nil // binary without libs: leave it to whisper to resolve
+	}
+	if err := os.MkdirAll(dstLib, 0755); err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		s, d := filepath.Join(srcLib, e.Name()), filepath.Join(dstLib, e.Name())
+		if sameFileContent(s, d) {
+			continue
+		}
+		if err := copyFile(s, d, 0755); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func copyFile(src, dst string, perm os.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -233,6 +270,13 @@ func ensureBridgeService() (string, error) {
 			binaryChanged = true
 			actions = append(actions, "installed bridge binary")
 		}
+	}
+
+	// The speech engine ships in the Claude extension directory, but the bridge
+	// runs from binDir(), so copy it across — otherwise transcription silently
+	// never starts on a machine without a system whisper install.
+	if err := installSpeechEngine(filepath.Dir(self)); err != nil {
+		actions = append(actions, "note: speech engine not installed ("+err.Error()+")")
 	}
 
 	// Write the launchd plist if missing or outdated.

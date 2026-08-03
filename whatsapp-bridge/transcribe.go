@@ -269,11 +269,14 @@ func transcribeAudioFile(oggPath string) (string, error) {
 		"-l", lang,
 		"-nt", "-np",
 	)
-	// ggml has a build-time backend directory compiled in (Homebrew's Cellar).
-	// On a machine without Homebrew that path is absent and ggml falls back to
-	// searching beside libggml, which is why bundle-whisper.sh copies the
-	// backend .so files into the same lib/ directory. GGML_BACKEND_PATH is not
-	// usable here: it names a single .so, not a directory.
+	// ggml has Homebrew's Cellar path compiled in as its backend directory and
+	// does NOT fall back to searching beside the library or the executable
+	// (verified: without that path it aborts outright). GGML_BACKEND_PATH names
+	// exactly one .so — no directories, no lists — so point it at the bundled
+	// CPU backend, which is the one ggml cannot run without.
+	if so := bundledCPUBackend(bin); so != "" {
+		cmd.Env = append(os.Environ(), "GGML_BACKEND_PATH="+so)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -287,6 +290,25 @@ func transcribeAudioFile(oggPath string) (string, error) {
 		return "", nil
 	}
 	return text, nil
+}
+
+// bundledCPUBackend returns the ggml CPU backend shipped alongside our whisper
+// copy, or "" when whisper came from a system install that can find its own.
+// The apple_mN variants are interchangeable in practice (an m1 build loads on
+// an m4), so the newest available is fine.
+func bundledCPUBackend(whisperPath string) string {
+	libs := filepath.Join(filepath.Dir(whisperPath), "lib")
+	for _, name := range []string{
+		"libggml-cpu-apple_m4.so",
+		"libggml-cpu-apple_m2_m3.so",
+		"libggml-cpu-apple_m1.so",
+	} {
+		p := filepath.Join(libs, name)
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p
+		}
+	}
+	return ""
 }
 
 func lastLine(s string) string {
