@@ -1,6 +1,7 @@
 # Third-party components
 
-This extension redistributes the following binaries in `lib/` and `whisper-cli`.
+This extension redistributes the following binaries: `whisper-cli` and `lib/`
+on macOS, `whisper-cli.exe` and the `.dll` files beside it on Windows.
 
 ## whisper.cpp — MIT License
 
@@ -24,7 +25,8 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Applies to: `whisper-cli`, `lib/libwhisper.*.dylib`
+Applies to: `whisper-cli`, `lib/libwhisper.*.dylib`, `whisper-cli.exe`,
+`whisper.dll`
 
 ## ggml — MIT License
 
@@ -32,7 +34,8 @@ Copyright (c) 2023-2024 The ggml authors
 
 Same MIT terms as above.
 
-Applies to: `lib/libggml*.dylib`, `lib/libggml-*.so`
+Applies to: `lib/libggml*.dylib`, `lib/libggml-*.so`, `ggml.dll`,
+`ggml-base.dll`, `ggml-cpu-*.dll`
 
 ## LLVM OpenMP Runtime — Apache License 2.0 with LLVM Exception
 
@@ -41,7 +44,7 @@ Copyright (c) LLVM Project contributors.
 Licensed under the Apache License, Version 2.0 with the LLVM exception. You may
 obtain a copy of the License at <https://llvm.org/LICENSE.txt>.
 
-Applies to: `lib/libomp.dylib`
+Applies to: `lib/libomp.dylib` (macOS only)
 
 ## Speech model
 

@@ -1,13 +1,14 @@
-# Copy whisper.cpp and its DLLs into the extension so transcription works on a
-# Windows PC with no developer tooling installed.
+# Copy whisper.cpp and the DLLs it needs into the extension, so transcription
+# works on a Windows PC with no developer tooling installed.
 #
-# Run this ON WINDOWS, from a checkout of this repository:
 #     powershell -ExecutionPolicy Bypass -File installer\bundle-whisper.ps1
 #
-# It downloads the official whisper.cpp Windows release unless -WhisperZip
-# points at one already on disk. The speech MODEL is not bundled — it is
-# hundreds of megabytes and downloads itself on first run. This ships only the
-# engine.
+# The speech MODEL is not bundled — it is hundreds of megabytes and downloads
+# itself on first run. This ships only the engine (~10 MB).
+#
+# Note this does not have to run on Windows: it only downloads a zip and copies
+# files out of it, which any platform can do. See bundle-whisper.sh for the
+# equivalent, which is what actually produced the committed files.
 #
 # Unlike macOS, nothing here rewrites load paths: the Windows loader searches
 # the directory the .exe was loaded from, so the DLLs simply have to sit beside
@@ -15,11 +16,9 @@
 
 [CmdletBinding()]
 param(
-    # A whisper.cpp release zip already on disk. Leave empty to download.
     [string]$WhisperZip = "",
-    # Which prebuilt release to fetch. x64 is right for almost every PC;
-    # Windows on ARM would need the arm64 asset instead.
-    [string]$Release = "v1.7.6",
+    # whisper.cpp tags its prebuilt releases bNNNN, not vX.Y.Z.
+    [string]$Release = "b4938",
     [string]$Asset   = "whisper-bin-x64.zip"
 )
 
@@ -38,38 +37,45 @@ try {
         Write-Host "Downloading $url"
         Invoke-WebRequest -Uri $url -OutFile $WhisperZip
     }
-    if (-not (Test-Path $WhisperZip)) {
-        throw "whisper release zip not found: $WhisperZip"
-    }
+    if (-not (Test-Path $WhisperZip)) { throw "whisper release zip not found: $WhisperZip" }
 
     $extracted = Join-Path $work "extracted"
     Expand-Archive -Path $WhisperZip -DestinationPath $extracted -Force
 
     # The release layout has moved between versions, so find the executable
     # rather than assuming where it sits.
-    $exe = Get-ChildItem -Path $extracted -Recurse -Filter "whisper-cli.exe" |
-           Select-Object -First 1
-    if (-not $exe) {
-        throw "whisper-cli.exe not found inside $WhisperZip"
-    }
+    $exe = Get-ChildItem -Path $extracted -Recurse -Filter "whisper-cli.exe" | Select-Object -First 1
+    if (-not $exe) { throw "whisper-cli.exe not found inside $WhisperZip" }
 
     Copy-Item $exe.FullName (Join-Path $dest "whisper-cli.exe") -Force
 
-    # Every DLL beside the executable: whisper.dll, ggml*.dll and their
-    # dependencies. ggml aborts rather than degrading when it cannot load a
-    # backend, so a missing DLL is not a quiet loss of quality — it is a crash.
-    $dlls = Get-ChildItem -Path $exe.Directory -Filter "*.dll"
-    foreach ($dll in $dlls) {
-        Copy-Item $dll.FullName (Join-Path $dest $dll.Name) -Force
+    # Only what whisper-cli actually loads. The release also carries SDL2.dll,
+    # llama.dll and parakeet.dll for its other tools — about 5 MB that would
+    # never be opened.
+    #
+    # Every ggml-cpu-*.dll matters: the release ships one per instruction-set
+    # generation (sandybridge, haswell, skylakex, icelake, alderlake, …) and
+    # ggml picks the right one for the CPU at run time. Shipping a subset means
+    # a machine outside that subset gets no backend, and ggml aborts rather than
+    # falling back. This is also why GGML_BACKEND_PATH must NOT be set on
+    # Windows — it names a single file and would pin every PC to one variant.
+    $wanted = @("whisper.dll", "ggml.dll", "ggml-base.dll")
+    $copied = 0
+    foreach ($dll in Get-ChildItem -Path $exe.Directory -Filter "*.dll") {
+        if ($wanted -contains $dll.Name -or $dll.Name -like "ggml-cpu-*.dll") {
+            Copy-Item $dll.FullName (Join-Path $dest $dll.Name) -Force
+            $copied++
+        }
     }
 
-    if (-not ($dlls | Where-Object { $_.Name -like "ggml-cpu*.dll" })) {
-        Write-Warning "No ggml-cpu*.dll in this release. The CPU backend may be linked into ggml.dll, which is fine — but if transcription aborts on the target PC, this is the first thing to check."
+    $variants = (Get-ChildItem $dest -Filter "ggml-cpu-*.dll").Count
+    if ($variants -lt 2) {
+        Write-Warning "Only $variants ggml CPU backend(s) bundled. Expect one per instruction-set generation; too few means older or newer CPUs will fail to start."
     }
 
-    $bundled = (Get-ChildItem $dest -Filter "*.dll" | Measure-Object -Property Length -Sum).Sum
-    Write-Host ("Bundled whisper into {0} ({1:N1} MB of DLLs, {2} files)" -f `
-        $dest, ($bundled / 1MB), $dlls.Count)
+    $size = (Get-ChildItem $dest -Filter "*.dll" | Measure-Object -Property Length -Sum).Sum
+    Write-Host ("Bundled whisper into {0} ({1} DLLs, {2} CPU backends, {3:N1} MB)" -f `
+        $dest, $copied, $variants, ($size / 1MB))
     Write-Host "Reminder: test on a PC with no whisper install of its own before shipping."
 }
 finally {

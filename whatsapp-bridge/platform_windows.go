@@ -133,23 +133,25 @@ func speechEngineFiles(srcDir string) [][2]string {
 	return pairs
 }
 
-// ggmlBackendPath returns the bundled ggml CPU backend, or "" if there is none.
+// ggmlBackendPath deliberately returns "" on Windows: this platform must NOT
+// set GGML_BACKEND_PATH.
 //
-// On Windows the DLL search starts in the executable's own directory, so the
-// backend is usually found without help — but ggml aborts outright rather than
-// degrading when it cannot locate one, and GGML_BACKEND_PATH is honoured on
-// every platform, so pointing it at our copy costs nothing and removes the
-// failure mode. It names exactly one file, not a directory and not a list.
-func ggmlBackendPath(whisperPath string) string {
-	dir := filepath.Dir(whisperPath)
-	for _, name := range []string{"ggml-cpu.dll", "ggml-backend.dll"} {
-		p := filepath.Join(dir, name)
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return p
-		}
-	}
-	return ""
-}
+// The macOS problem was that ggml had Homebrew's Cellar path compiled in as its
+// backend directory and aborted when that path was absent, so the variable had
+// to point at the one bundled backend. Windows is the opposite case. The
+// official build ships NINE CPU-specific backends side by side —
+// ggml-cpu-sandybridge.dll, -haswell, -skylakex, -icelake, -alderlake and so on
+// — and ggml selects among them at run time from the CPU's actual instruction
+// support, searching the directory the executable was loaded from.
+//
+// GGML_BACKEND_PATH names exactly one file. Setting it here would pin every
+// machine to a single variant, which is worse than useless: a laptop without
+// those instructions would crash rather than fall back. The friend's CPU is
+// unknown, which is precisely why the choice has to stay with ggml.
+//
+// So: leave the variable unset, and make sure every ggml-cpu-*.dll is bundled
+// beside whisper-cli.exe (see speechEngineFiles and bundle-whisper.ps1).
+func ggmlBackendPath(string) string { return "" }
 
 // defaultWhisperModelSize matches macOS for now, so transcript quality is the
 // same on both platforms — Hebrew in particular degrades noticeably on the

@@ -167,7 +167,7 @@ verification checklist above is still entirely outstanding.
 | Service layer | `install.go` (shared) + `service_darwin.go` / `service_windows.go` |
 | Platform odds and ends | `platform_darwin.go` / `platform_windows.go` |
 | Catch-up tracking | `syncstate.go`, new `whatsapp_sync_status` tool |
-| Packaging | `installer/build-mcpb.sh`, `installer/bundle-whisper.ps1`, `Uninstall WhatsApp Assistant.bat`, `installer/README-windows.md` |
+| Packaging | `installer/build-mcpb.sh`, `installer/bundle-whisper-windows.sh`, `installer/bundle-whisper.ps1`, `Uninstall WhatsApp Assistant.bat`, `installer/README-windows.md` |
 
 `launchd.go` is gone: its portable half is `install.go`, its macOS half is
 `service_darwin.go`.
@@ -236,6 +236,23 @@ are gone rather than late. Both setup guides say so.
 - **DLLs must sit beside `whisper-cli.exe`, not in `lib/`** — the Windows loader
   searches the directory the executable was loaded from. macOS keeps `lib/`
   because that is where its `@loader_path` rpath points.
+- **Windows must NOT set `GGML_BACKEND_PATH`** — the opposite of the macOS fix,
+  and getting this backwards is a crash on someone else's laptop. The official
+  Windows build ships **nine** CPU-specific backends side by side
+  (`ggml-cpu-sandybridge.dll`, `-haswell`, `-skylakex`, `-icelake`,
+  `-alderlake`, …) and ggml selects among them at run time from the CPU's actual
+  instruction support. `GGML_BACKEND_PATH` names exactly one file, so setting it
+  pins every machine to a single variant and a CPU without those instructions
+  aborts instead of falling back. macOS needed the variable only because
+  Homebrew had its Cellar path compiled in. Bundle every `ggml-cpu-*.dll` and
+  leave the variable unset.
+- **Bundling the Windows engine does not require Windows.** It is a zip download
+  and a file copy; `installer/bundle-whisper-windows.sh` does it from any
+  platform and is what produced the committed files.  `bundle-whisper.ps1` is
+  the same thing for a Windows box. Note whisper.cpp tags prebuilt releases
+  `bNNNN`, not `vX.Y.Z`.
+- **Do not bundle the whole release.** It also carries `SDL2.dll`, `llama.dll`
+  and `parakeet.dll` for its other tools — about 5 MB `whisper-cli` never opens.
 
 ## Still open — needs the real PC
 
@@ -248,9 +265,9 @@ are gone rather than late. Both setup guides say so.
    check Hebrew quality on a real message before accepting it, and note that a
    slow model directly lengthens the window in which `whatsapp_sync_status`
    reports the store as incomplete.
-4. **`bundle-whisper.ps1` has never been run.** It must be run on Windows, and
-   the resulting bundle tested on a PC with no whisper install of its own — the
-   ggml backend problem from the macOS port is the thing to watch for.
+4. **The bundled speech engine has never been executed.** It is now committed
+   (`whisper-cli.exe` plus 12 DLLs, ~9 MB) and the extension ships it, but no
+   machine has run it. Test on a PC with no whisper install of its own.
 5. **The order of `<Settings>` children in the task XML is schema-significant.**
    Task Scheduler's XSD defines a sequence, not a set: elements in the wrong
    order make `schtasks /Create /XML` reject the file as malformed. The order in
