@@ -116,9 +116,20 @@ Suggested approach: rename `launchd.go` → `service_darwin.go`, add
    measure, and consider `small` (~500 MB) as the Windows default.
 2. **Architecture.** Windows on ARM exists but is rare; x64 is almost certainly
    right. Confirm what the friend's PC is before building.
-3. **Code signing.** Unsigned Windows executables trigger **SmartScreen**,
-   which is a harsher warning than macOS Gatekeeper. Decide whether to accept
-   "More info → Run anyway" in the instructions or buy a signing certificate.
+3. **Code signing — DECIDED: no certificate.** The app will be unsigned and
+   the user will approve it as trusted. Document the exact clicks in the
+   Windows setup guide.
+
+   Do **not** assume SmartScreen will even appear. The equivalent macOS
+   question turned out differently than expected: a `.mcpb` stamped with a real
+   download-quarantine flag installed and ran fine, because Gatekeeper does not
+   gate binaries launched by Claude Desktop from an installed extension. The
+   Windows equivalent — an `.exe` inside an extension, launched by Claude
+   rather than double-clicked — may be treated the same way. **Test it before
+   writing any warning text into the guide**: stamp the file with a real
+   Mark-of-the-Web (downloading it through a browser is the simplest way) and
+   install it. Only if a prompt actually appears should the guide mention
+   "More info → Run anyway".
 
 ## Verification (do before calling it done)
 
