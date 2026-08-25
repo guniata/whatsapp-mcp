@@ -32,34 +32,51 @@ const (
 	whisperSampleRate = 16000 // what whisper.cpp expects
 )
 
-func modelsDir() string { return filepath.Join(appHome(), "models") }
+// whisperModelSize picks the speech model. The trade-off is quality against
+// speed on the machine actually doing the work: large-v3-turbo is ~1.5 GB and
+// noticeably better in Hebrew, small is ~470 MB and several times faster.
+//
+// A slow model is not merely inconvenient here — after the computer has been
+// off for a day, a backlog of voice notes has to be worked through before a
+// summary can include what was said in them, and whatsapp_sync_status reports
+// the copy as incomplete until it is. On a low-powered Windows laptop with no
+// GPU that gap can be long enough to matter, which is why this is switchable
+// without a rebuild. Measure on the target machine before changing it: a wrong
+// transcript is worse than a late one.
+func whisperModelSize() string {
+	if v := os.Getenv("WHATSAPP_WHISPER_MODEL_SIZE"); v != "" {
+		return v
+	}
+	return defaultWhisperModelSize
+}
 
 func whisperModelPath() string {
 	if v := os.Getenv("WHATSAPP_WHISPER_MODEL"); v != "" {
 		return v
 	}
-	return filepath.Join(modelsDir(), "ggml-large-v3-turbo.bin")
+	return filepath.Join(modelsDir(), "ggml-"+whisperModelSize()+".bin")
+}
+
+func whisperModelURL() string {
+	return "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-" + whisperModelSize() + ".bin"
 }
 
 // whisperBinary finds the transcription binary: the copy bundled next to this
-// executable first, then the usual install locations. launchd gives the bridge
-// a minimal PATH, so well-known paths are checked explicitly rather than
-// relying on a PATH lookup alone.
+// executable first, then the usual install locations. The service gives the
+// bridge a minimal environment, so well-known paths are checked explicitly
+// rather than relying on a PATH lookup alone.
 func whisperBinary() string {
 	var candidates []string
 	if v := os.Getenv("WHATSAPP_WHISPER_BIN"); v != "" {
 		candidates = append(candidates, v)
 	}
 	if self, err := os.Executable(); err == nil {
-		candidates = append(candidates, filepath.Join(filepath.Dir(self), "whisper-cli"))
+		candidates = append(candidates, filepath.Join(filepath.Dir(self), whisperExeName))
 	}
-	if p, err := exec.LookPath("whisper-cli"); err == nil {
+	if p, err := exec.LookPath(whisperExeName); err == nil {
 		candidates = append(candidates, p)
 	}
-	candidates = append(candidates,
-		"/opt/homebrew/bin/whisper-cli",
-		"/usr/local/bin/whisper-cli",
-	)
+	candidates = append(candidates, systemWhisperCandidates()...)
 	for _, c := range candidates {
 		if st, err := os.Stat(c); err == nil && !st.IsDir() {
 			return c
@@ -67,8 +84,6 @@ func whisperBinary() string {
 	}
 	return ""
 }
-
-const whisperModelURL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
 
 // transcriptionAvailable reports whether transcription can run, and why not.
 func transcriptionAvailable() (bool, string) {
@@ -92,6 +107,8 @@ func placeholdersN(n int) string {
 // download is renamed into place and treated as valid forever.
 func looksLikeGGMLModel(path string) bool {
 	st, err := os.Stat(path)
+	// A floor, not a size check: enough to reject an error page or a truncated
+	// download, low enough that the smallest model we ship still passes.
 	if err != nil || st.Size() < 100*1024*1024 {
 		return false
 	}
@@ -130,9 +147,9 @@ func ensureWhisperModel(logger waLog.Logger) bool {
 	tmp := whisperModelPath() + ".part"
 	os.Remove(tmp)
 
-	fmt.Println("Downloading the speech model for voice-note transcription (about 1.5 GB, one time)…")
+	fmt.Printf("Downloading the %s speech model for voice-note transcription (one time)…\n", whisperModelSize())
 	client := &http.Client{Timeout: 2 * time.Hour}
-	resp, err := client.Get(whisperModelURL)
+	resp, err := client.Get(whisperModelURL())
 	if err != nil {
 		logger.Warnf("speech model download failed: %v", err)
 		return false
@@ -313,13 +330,13 @@ func transcribeAudioFile(oggPath string) (string, error) {
 		"-nth", "0.6",
 		"-sns",
 	)
-	// ggml has Homebrew's Cellar path compiled in as its backend directory and
-	// does NOT fall back to searching beside the library or the executable
-	// (verified: without that path it aborts outright). GGML_BACKEND_PATH names
-	// exactly one .so — no directories, no lists — so point it at the bundled
-	// CPU backend, which is the one ggml cannot run without.
-	if so := bundledCPUBackend(bin); so != "" {
-		cmd.Env = append(os.Environ(), "GGML_BACKEND_PATH="+so)
+	// ggml has its build-time backend directory compiled in and does NOT fall
+	// back to searching beside the library or the executable (verified: without
+	// that path it aborts outright). GGML_BACKEND_PATH names exactly one file —
+	// no directories, no lists — so point it at the bundled CPU backend, which
+	// is the one ggml cannot run without. See ggmlBackendPath per platform.
+	if backend := ggmlBackendPath(bin); backend != "" {
+		cmd.Env = append(os.Environ(), "GGML_BACKEND_PATH="+backend)
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -376,25 +393,6 @@ func isHallucinatedTranscript(text string) bool {
 	return most >= 4 && float64(most)/float64(len(phrases)) > 0.8
 }
 
-// bundledCPUBackend returns the ggml CPU backend shipped alongside our whisper
-// copy, or "" when whisper came from a system install that can find its own.
-// The apple_mN variants are interchangeable in practice (an m1 build loads on
-// an m4), so the newest available is fine.
-func bundledCPUBackend(whisperPath string) string {
-	libs := filepath.Join(filepath.Dir(whisperPath), "lib")
-	for _, name := range []string{
-		"libggml-cpu-apple_m4.so",
-		"libggml-cpu-apple_m2_m3.so",
-		"libggml-cpu-apple_m1.so",
-	} {
-		p := filepath.Join(libs, name)
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return p
-		}
-	}
-	return ""
-}
-
 func lastLine(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	if len(lines) == 0 {
@@ -409,6 +407,9 @@ func lastLine(s string) string {
 func (store *MessageStore) transcriptionWorker(client *whatsmeow.Client, logger waLog.Logger) {
 	if whisperBinary() == "" {
 		fmt.Println("Voice-note transcription is off: the speech-to-text engine is not installed.")
+		// Readers must know this, or they would wait forever for a backlog
+		// that nothing is working through.
+		store.setSyncState(syncKeyTranscription, "off")
 		return
 	}
 	// The bridge starts at login, often before the network is up, so keep
@@ -417,6 +418,7 @@ func (store *MessageStore) transcriptionWorker(client *whatsmeow.Client, logger 
 		time.Sleep(5 * time.Minute)
 	}
 	fmt.Println("Voice-note transcription is on.")
+	store.setSyncState(syncKeyTranscription, "on")
 
 	// Messages that failed this run; retried on the next restart, but not in a
 	// tight loop. Media whose URL has expired can never succeed.

@@ -148,3 +148,115 @@ Suggested approach: rename `launchd.go` → `service_darwin.go`, add
 - macOS implementation: everything on `main`, merged as `b8f2bab` (PR #1).
 - Friend-facing setup guide: `installer/README.md` — will need a Windows edition.
 - Engine bundler: `installer/bundle-whisper.sh` — needs a Windows counterpart.
+
+---
+
+# Implementation status (updated after the porting session)
+
+Everything in "The work, in order" is implemented. Both targets build, vet and
+test clean from a Mac: `go build`, `go vet` and `go test` for `darwin/arm64` and
+`windows/amd64`. **Nothing below has been run on a real Windows PC yet** — the
+verification checklist above is still entirely outstanding.
+
+## What changed
+
+| Area | Files |
+|---|---|
+| Pure-Go SQLite (no cgo) | `db.go` — every handle opens here |
+| Paths | `paths.go` + `paths_darwin.go` / `paths_windows.go` |
+| Service layer | `install.go` (shared) + `service_darwin.go` / `service_windows.go` |
+| Platform odds and ends | `platform_darwin.go` / `platform_windows.go` |
+| Catch-up tracking | `syncstate.go`, new `whatsapp_sync_status` tool |
+| Packaging | `installer/build-mcpb.sh`, `installer/bundle-whisper.ps1`, `Uninstall WhatsApp Assistant.bat`, `installer/README-windows.md` |
+
+`launchd.go` is gone: its portable half is `install.go`, its macOS half is
+`service_darwin.go`.
+
+## New: catch-up tracking (not in the original plan)
+
+The friend's PC is on mornings and evenings, not all day. Messages that arrive
+while it is off are **not** lost — WhatsApp buffers them and pushes them on
+reconnect, with their original timestamps, so a date-range query still finds
+them. What was missing was any way to know whether that push had *finished*: a
+scheduled summary running 30 seconds after login would read a half-filled store
+and report a fraction of the day as if it were all of it.
+
+The bridge now records connection and catch-up state (from
+`events.OfflineSyncPreview` / `OfflineSyncCompleted`, plus a heartbeat) into a
+`sync_state` table, and `whatsapp_sync_status` reports it — waiting, by default,
+until the store is complete. Readiness also accounts for voice notes that have
+arrived but are not yet transcribed, since their spoken content is not in the
+store until they are.
+
+The one hard limit is unchanged and not fixable here: a device left offline long
+enough gets unlinked by WhatsApp (about two weeks), and messages from that gap
+are gone rather than late. Both setup guides say so.
+
+## Decisions taken
+
+- **Service mechanism: Scheduled Task**, as the plan suspected. Logon trigger
+  (survives logout/login and reboot) + `RestartOnFailure` + a five-minute
+  repetition with `MultipleInstancesPolicy=IgnoreNew`, which covers the case
+  restart-on-failure does not: a process that exited without failing.
+- **Task Scheduler cannot set environment variables**, unlike launchd's
+  `EnvironmentVariables`. `WHATSAPP_ASSISTANT_HOME` / `WHATSAPP_BRIDGE_PORT` are
+  passed as `--home` / `--port` flags and put back into the environment at
+  startup (`parseBridgeArgs`).
+- **`bridge --service`** marks a service-started bridge. Only then does it hide
+  its console window and take over its own log file — Task Scheduler captures
+  neither stdout nor stderr, and doing either to a terminal the user is sitting
+  in front of would be wrong.
+- **Architecture: x64.** Confirmed with the author.
+- **Speech model: unchanged (`large-v3-turbo`) pending measurement.** Hebrew
+  degrades noticeably on the smaller models, so this was not switched on a
+  guess. `WHATSAPP_WHISPER_MODEL_SIZE=small` changes it with no rebuild — see
+  the open questions below.
+
+## Gotchas found in this session — do not rediscover these either
+
+- **The driver swap is only byte-compatible with `_time_format=sqlite`.**
+  Without it `modernc.org/sqlite` writes `time.Time` as Go's `time.String()`
+  (`2006-01-02 15:04:05.9 -0700 MST m=+0.0`) where the cgo driver wrote
+  `2006-01-02 15:04:05.999999999-07:00`. The `timestamp` column is TEXT, so
+  every `ORDER BY` and date filter is a *string* comparison — a store holding
+  both formats sorts wrongly and silently. Verified against a copy of a real
+  19k-message store: identical bytes, identical ordering, identical parsing.
+  `TestTimestampWriteFormat` guards it.
+- **`schtasks /XML` demands UTF-16LE with a BOM.** Handed UTF-8 it reports the
+  XML as malformed and says nothing about encoding.
+- **Never parse `schtasks` output.** Its status strings are localised; the
+  friend's Windows may not be in English. Only exit codes are used.
+- **The service definition is registered under a fixed per-user name**, so a
+  process running against a throwaway `WHATSAPP_ASSISTANT_HOME` will re-point
+  the *installed* service at that store. Set `WHATSAPP_ASSISTANT_NO_AUTOSETUP=1`
+  for any test run. (Learned the hard way: a test run hijacked the author's
+  live service and popped a pairing QR on screen.)
+- **Windows will not delete a running `.exe`,** and the uninstaller lives in the
+  directory it has to remove. The `.bat` runs a copy from `%TEMP%` instead.
+- **DLLs must sit beside `whisper-cli.exe`, not in `lib/`** — the Windows loader
+  searches the directory the executable was loaded from. macOS keeps `lib/`
+  because that is where its `@loader_path` rpath points.
+
+## Still open — needs the real PC
+
+1. **The whole verification checklist above.** None of it has been run.
+2. **SmartScreen.** Deliberately not mentioned in `README-windows.md`, per the
+   decision in this plan: test with a real Mark-of-the-Web first, and only if a
+   prompt actually appears add "More info → Run anyway" to the guide.
+3. **Model timing.** Time a real voice note on the target laptop. If
+   `large-v3-turbo` is too slow, set `WHATSAPP_WHISPER_MODEL_SIZE=small` — but
+   check Hebrew quality on a real message before accepting it, and note that a
+   slow model directly lengthens the window in which `whatsapp_sync_status`
+   reports the store as incomplete.
+4. **`bundle-whisper.ps1` has never been run.** It must be run on Windows, and
+   the resulting bundle tested on a PC with no whisper install of its own — the
+   ggml backend problem from the macOS port is the thing to watch for.
+5. **The order of `<Settings>` children in the task XML is schema-significant.**
+   Task Scheduler's XSD defines a sequence, not a set: elements in the wrong
+   order make `schtasks /Create /XML` reject the file as malformed. The order in
+   `taskXML()` follows what Task Scheduler itself exports, but that is reasoning,
+   not evidence. Failure is loud — `ensureBridgeService` returns the schtasks
+   output and `whatsapp_status` prints it — so the first run on the real PC
+   settles it. Deliberately not "fixed" by falling back to the simpler
+   `schtasks /SC ONLOGON` form, which cannot express RestartOnFailure or the
+   repetition and would silently lose the KeepAlive equivalent.
