@@ -5,9 +5,12 @@ whatsapp.log
 # Local WhatsApp session + message store — PRIVATE, never commit
 whatsapp-bridge/store/
 
-# Compiled bridge binaries (distribute via GitHub Releases, don't commit)
+# Compiled binaries (distribute via GitHub Releases, don't commit)
 whatsapp-bridge/whatsapp-bridge-app
 whatsapp-bridge/whatsapp-bridge-app-*
+whatsapp-bridge/whatsapp-assistant
+installer/mcpb/server/whatsapp-assistant
+installer/mcpb/*.mcpb
 
 # macOS
 .DS_Store
