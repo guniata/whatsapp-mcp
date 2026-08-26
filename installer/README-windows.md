@@ -139,6 +139,20 @@ the system tray → **Quit**, not just closing the window) and reopen it.
 
 ---
 
+## Updating to a newer version
+
+Install the new file the same way — **Settings → Extensions → Advanced settings
+→ "Install Extension…"**. There is no need to remove the old one first.
+
+Your copied messages and your WhatsApp link are kept, so there is nothing to set
+up again and no QR code to re-scan. The background sync program updates itself
+the first time Claude uses it.
+
+If Claude's extension list ends up showing WhatsApp Assistant twice, remove the
+older one there.
+
+---
+
 ## Removing it
 
 1. Double-click **`Uninstall WhatsApp Assistant.bat`** and confirm. This stops

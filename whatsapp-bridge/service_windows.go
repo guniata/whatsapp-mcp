@@ -56,22 +56,27 @@ func taskUserID() string {
 	return user
 }
 
-// bridgeServiceArgs are the arguments the service passes to the bridge.
+// bridgeServiceArgs renders the shared bridgeArgs as one command-line string
+// for the task definition's <Arguments> element.
+//
 // Task Scheduler has no equivalent of launchd's EnvironmentVariables, so any
-// override the installing process is running under is passed on the command
-// line instead — otherwise a bridge started by the task would resolve different
-// paths than the MCP server that installed it.
+// override the installing process is running under travels on the command line
+// instead — otherwise a bridge started by the task would resolve different paths
+// than the MCP server that installed it. It is built from bridgeArgs rather than
+// assembled separately, so the task and a direct spawn cannot start the bridge
+// with different arguments.
 func bridgeServiceArgs() string {
-	args := "bridge --service"
-	if home, ok := appHomeOverride(); ok {
-		// A trailing backslash would escape the closing quote when Windows
-		// parses the command line, swallowing the rest of the arguments.
-		args += fmt.Sprintf(` --home "%s"`, strings.TrimRight(home, `\/`))
+	parts := make([]string, 0, len(bridgeArgs()))
+	for _, a := range bridgeArgs() {
+		if strings.ContainsAny(a, ` \t"`) {
+			// A trailing backslash would escape the closing quote when Windows
+			// parses the command line, swallowing the rest of the arguments.
+			parts = append(parts, `"`+strings.TrimRight(a, `\`)+`"`)
+			continue
+		}
+		parts = append(parts, a)
 	}
-	if v := os.Getenv("WHATSAPP_BRIDGE_PORT"); v != "" {
-		args += fmt.Sprintf(` --port %s`, v)
-	}
-	return args
+	return strings.Join(parts, " ")
 }
 
 func taskXML() string {

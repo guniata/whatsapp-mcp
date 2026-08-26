@@ -136,6 +136,17 @@ just closing the window) and reopen it.
 
 ---
 
+## Updating to a newer version
+
+Double-click the new file, or use **Settings → Extensions → Advanced settings →
+"Install Extension…"**. There is no need to remove the old one first.
+
+Your copied messages and your WhatsApp link are kept, so there is nothing to set
+up again and no QR code to re-scan. The background sync program updates itself
+the first time Claude uses it.
+
+---
+
 ## Removing it
 
 1. Double-click **`Uninstall WhatsApp Assistant.command`** and confirm. This
