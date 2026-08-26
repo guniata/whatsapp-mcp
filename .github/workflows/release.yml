@@ -1,0 +1,118 @@
+name: Release extension
+
+# Manual only. Building is cheap and fast, but a release is a thing other people
+# download, so it happens when someone decides it should — not on every push.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or commit to build"
+        required: false
+        default: main
+      platform:
+        description: "Which package to build"
+        required: false
+        type: choice
+        options:
+          - both
+          - windows
+          - macos
+        default: both
+      draft:
+        description: "Draft release (visible only to you, not downloadable without signing in)"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: whatsapp-bridge/go.mod
+          cache-dependency-path: whatsapp-bridge/go.sum
+
+      # A release is the wrong place to discover a broken build, and neither
+      # target can be run here, so the compiler and the tests are the only gate
+      # there is. Both platforms, because most of what changes is per-platform.
+      - name: Vet and test both targets
+        working-directory: whatsapp-bridge
+        run: |
+          go vet ./...
+          GOOS=windows GOARCH=amd64 go vet ./...
+          go test ./...
+
+      - name: Build the package
+        env:
+          # The runner is linux/amd64, so the script's "follow the host" default
+          # would quietly produce an Intel macOS binary. The extension targets
+          # Apple silicon.
+          DARWIN_ARCH: arm64
+        run: |
+          case "${{ inputs.platform }}" in
+            macos) target=darwin ;;
+            *)     target="${{ inputs.platform }}" ;;
+          esac
+          ./installer/build-mcpb.sh "$target"
+
+      # The version is not an input: it lives in whatsapp-bridge/main.go, the
+      # manifest must agree with it (build-mcpb.sh fails otherwise), and the
+      # self-install compares the two to refuse a downgrade. Taking it from the
+      # source keeps one source of truth instead of three.
+      - name: Read version and locate the package
+        id: pkg
+        run: |
+          version="$(grep -o 'appVersion = "[^"]*"' whatsapp-bridge/main.go | cut -d'"' -f2)"
+          case "${{ inputs.platform }}" in
+            both)    file="installer/WhatsApp Assistant.mcpb" ;;
+            windows) file="installer/WhatsApp Assistant (Windows).mcpb" ;;
+            macos)   file="installer/WhatsApp Assistant (macOS).mcpb" ;;
+          esac
+          [ -f "$file" ] || { echo "::error::expected package not found: $file"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+          echo "Built $file for v$version ($(du -h "$file" | cut -f1))"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.pkg.outputs.version }}
+          FILE: ${{ steps.pkg.outputs.file }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          sha="$(git rev-parse --short HEAD)"
+          # Written line by line rather than as one multi-line string: inside a
+          # YAML block scalar every line has to stay indented, and indented
+          # lines would reach Markdown as code blocks.
+          {
+            echo "Built from \`${{ inputs.ref }}\` (\`$sha\`)."
+            echo
+            echo "**Install:** download the \`.mcpb\` below, then in Claude open **Settings -> Extensions** and drag the file in."
+            echo
+            echo "Setup guides: [Windows]($REPO_URL/blob/main/installer/README-windows.md) | [macOS]($REPO_URL/blob/main/installer/README.md)"
+          } > "$RUNNER_TEMP/notes.md"
+
+          # Re-running for a second platform must add to the existing release
+          # rather than replace it, so create only when the tag is new.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists; adding or replacing this asset."
+          else
+            gh release create "$TAG" \
+              --target "$(git rev-parse HEAD)" \
+              --title "WhatsApp Assistant $TAG" \
+              --notes-file "$RUNNER_TEMP/notes.md" \
+              ${{ inputs.draft && '--draft' || '' }}
+          fi
+          gh release upload "$TAG" "$FILE" --clobber
+          {
+            echo "### Released $TAG"
+            gh release view "$TAG" --json url -q .url
+          } >> "$GITHUB_STEP_SUMMARY"

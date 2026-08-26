@@ -14,3 +14,13 @@ installer/mcpb/*.mcpb
 
 # macOS
 .DS_Store
+
+# Build outputs: the binaries and the packed extension are produced by
+# installer/build-mcpb.sh, not checked in. The bundled speech engine is.
+installer/mcpb/server/whatsapp-assistant
+installer/mcpb/server/whatsapp-assistant.exe
+installer/*.mcpb
+
+# `go build ./...` drops a binary named after the module
+whatsapp-bridge/whatsapp-client
+whatsapp-bridge/whatsapp-client.exe

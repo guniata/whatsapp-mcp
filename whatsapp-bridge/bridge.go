@@ -7,15 +7,14 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/mdp/qrterminal"
 	qrcode "github.com/skip2/go-qrcode"
 
@@ -40,7 +39,7 @@ func NewMessageStore() (*MessageStore, error) {
 	}
 
 	// Open SQLite database for messages
-	db, err := sql.Open("sqlite3", "file:"+messagesDBPath()+"?_foreign_keys=on")
+	db, err := openSQLiteWritable(messagesDBPath())
 	if err != nil {
 		return nil, fmt.Errorf("failed to open message database: %v", err)
 	}
@@ -70,7 +69,7 @@ func NewMessageStore() (*MessageStore, error) {
 			PRIMARY KEY (id, chat_jid),
 			FOREIGN KEY (chat_jid) REFERENCES chats(jid)
 		);
-	`)
+	` + syncStateSchema)
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to create tables: %v", err)
@@ -572,6 +571,11 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 }
 
 func runBridge() {
+	// The service manager may not capture stdout (Windows Task Scheduler does
+	// not), so the bridge takes responsibility for its own log file where that
+	// is the case. No-op where the service manager already redirects.
+	redirectBridgeOutput()
+
 	// Set up logger
 	logger := waLog.Stdout("Client", "INFO", true)
 	logger.Infof("Starting WhatsApp client...")
@@ -585,7 +589,7 @@ func runBridge() {
 		return
 	}
 
-	container, err := sqlstore.New(context.Background(), "sqlite3", "file:"+sessionDBPath()+"?_foreign_keys=on", dbLog)
+	container, err := sqlstore.New(context.Background(), sqliteDriver, sessionStoreDSN(), dbLog)
 	if err != nil {
 		logger.Errorf("Failed to connect to database: %v", err)
 		return
@@ -618,6 +622,7 @@ func runBridge() {
 		return
 	}
 	defer messageStore.Close()
+	messageStore.startHeartbeat()
 
 	// Setup event handling for messages and history sync
 	client.AddEventHandler(func(evt interface{}) {
@@ -632,9 +637,37 @@ func runBridge() {
 
 		case *events.Connected:
 			logger.Infof("Connected to WhatsApp")
+			// A new connection invalidates any earlier catch-up: whatever the
+			// server is about to send has not been sent yet.
+			messageStore.setSyncState(syncKeyConnected, "1")
+			messageStore.setSyncTime(syncKeyConnectedAt, time.Now())
+			messageStore.setSyncState(syncKeyCatchUpTotal, "0")
+			messageStore.setSyncState(syncKeyCatchUpMsgs, "0")
+
+		case *events.Disconnected:
+			logger.Infof("Disconnected from WhatsApp; will reconnect automatically")
+			messageStore.setSyncState(syncKeyConnected, "0")
+			messageStore.setSyncTime(syncKeyDisconnectedAt, time.Now())
+
+		case *events.OfflineSyncPreview:
+			// Sent only when the computer missed something: the server is
+			// announcing the size of the backlog before pushing it.
+			logger.Infof("Catching up on %d missed events (%d messages)", v.Total, v.Messages)
+			messageStore.setSyncState(syncKeyCatchUpTotal, strconv.Itoa(v.Total))
+			messageStore.setSyncState(syncKeyCatchUpMsgs, strconv.Itoa(v.Messages))
+
+		case *events.OfflineSyncCompleted:
+			// Sent on every connection once the server has drained the queue,
+			// backlog or not. This is the signal that the local copy holds
+			// everything WhatsApp had for us.
+			logger.Infof("Finished catching up (%d events)", v.Count)
+			messageStore.setSyncState(syncKeyCatchUpCount, strconv.Itoa(v.Count))
+			messageStore.setSyncState(syncKeyCatchUpMsgs, "0")
+			messageStore.setSyncTime(syncKeyCatchUpDoneAt, time.Now())
 
 		case *events.LoggedOut:
 			logger.Warnf("Device logged out, please scan QR code to log in again")
+			messageStore.setSyncState(syncKeyConnected, "0")
 		}
 	})
 
@@ -665,12 +698,12 @@ func runBridge() {
 				if err := qrcode.WriteFile(evt.Code, qrcode.Medium, 512, qrPath); err != nil {
 					logger.Warnf("Could not render QR image: %v", err)
 				} else if !qrOpened {
-					fmt.Printf("\nA scannable QR image just opened in Preview. Scan it with:\n")
+					fmt.Printf("\nA scannable QR image just opened on screen. Scan it with:\n")
 					fmt.Printf("  WhatsApp > Settings > Linked Devices > Link a Device\n")
 					if absPath, aerr := filepath.Abs(qrPath); aerr == nil {
-						exec.Command("open", absPath).Start()
+						openFile(absPath)
 					} else {
-						exec.Command("open", qrPath).Start()
+						openFile(qrPath)
 					}
 					qrOpened = true
 				}
@@ -724,6 +757,9 @@ func runBridge() {
 	<-exitChan
 
 	fmt.Println("Disconnecting...")
+	// Record the shutdown before going: a reader that sees a fresh heartbeat
+	// but no connection should not be told the store is caught up.
+	messageStore.setSyncState(syncKeyConnected, "0")
 	// Disconnect client
 	client.Disconnect()
 }

@@ -1,7 +1,7 @@
 package main
 
 // Removal of everything the assistant installs outside the Claude extension
-// itself: the launchd agent, the installed binary, and (with --purge) the
+// itself: the background service, the installed binary, and (with --purge) the
 // local message store. The Desktop Extension has to be removed from Claude's
 // own Settings > Extensions — nothing here can do that.
 
@@ -9,8 +9,6 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 )
 
@@ -37,25 +35,16 @@ func runUninstall(purge bool, assumeYes bool) {
 
 	var done, failed []string
 
-	// Stop the service first so nothing is writing while we remove files.
-	if bridgeServiceLoaded() {
-		if out, err := exec.Command("launchctl", "bootout", launchdDomain()+"/"+launchdLabel).CombinedOutput(); err != nil {
-			failed = append(failed, fmt.Sprintf("stop background service: %v (%s)", err, strings.TrimSpace(string(out))))
-		} else {
-			done = append(done, "stopped background service")
-		}
-	}
-	if err := removeIfPresent(plistPath()); err != nil {
-		failed = append(failed, err.Error())
+	// Stop and deregister the service first, so nothing is writing to the files
+	// we are about to remove — and, on Windows, so the binary is not in use.
+	if err := unregisterService(); err != nil {
+		failed = append(failed, fmt.Sprintf("remove background service: %v", err))
 	} else {
-		done = append(done, "removed background service definition")
+		done = append(done, "stopped and removed background service")
 	}
 
-	// Remove the older service from the pre-1.0 hand-built setup, if present.
-	legacyLabel := "com.whatsapp-mcp.bridge"
-	exec.Command("launchctl", "bootout", launchdDomain()+"/"+legacyLabel).Run()
-	home, _ := os.UserHomeDir()
-	removeIfPresent(filepath.Join(home, "Library", "LaunchAgents", legacyLabel+".plist"))
+	// Remove anything left by the pre-1.0 hand-built setup.
+	removeLegacyService()
 
 	for _, dir := range []string{binDir(), logsDir()} {
 		if err := removeIfPresent(dir); err != nil {
@@ -72,7 +61,7 @@ func runUninstall(purge bool, assumeYes bool) {
 			done = append(done, "removed message store")
 		}
 		// The app home is only ours to delete once everything inside is gone.
-		os.Remove(filepath.Join(appHome(), ".setup.lock"))
+		os.Remove(setupLockPath())
 		os.Remove(appHome())
 	}
 

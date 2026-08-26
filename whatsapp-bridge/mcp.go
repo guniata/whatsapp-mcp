@@ -15,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -92,7 +91,7 @@ func runMCP() {
 	// Self-heal the always-on bridge in the background so that installing the
 	// Desktop Extension is the only manual step. Best-effort; whatsapp_status
 	// reports problems interactively.
-	if runtime.GOOS == "darwin" && os.Getenv("WHATSAPP_ASSISTANT_NO_AUTOSETUP") == "" {
+	if os.Getenv("WHATSAPP_ASSISTANT_NO_AUTOSETUP") == "" {
 		go func() {
 			defer func() { recover() }()
 			ensureBridgeService()
@@ -106,7 +105,7 @@ func runMCP() {
 		if _, err := os.Stat(messagesDBPath()); err != nil {
 			return nil, fmt.Errorf("WhatsApp message store not found at %s — the bridge has not run yet (or is using a different data directory)", messagesDBPath())
 		}
-		d, err := sql.Open("sqlite3", "file:"+messagesDBPath()+"?mode=ro")
+		d, err := openSQLiteReadOnly(messagesDBPath())
 		if err != nil {
 			return nil, err
 		}
@@ -257,7 +256,7 @@ func sessionDBRO() *sql.DB {
 		if _, err := os.Stat(sessionDBPath()); err != nil {
 			return
 		}
-		if d, err := sql.Open("sqlite3", "file:"+sessionDBPath()+"?mode=ro"); err == nil {
+		if d, err := openSQLiteReadOnly(sessionDBPath()); err == nil {
 			sessionDBHandle = d
 		}
 	})
@@ -667,10 +666,53 @@ var mcpTools = []toolDef{
 		inputSchema: `{"type":"object","properties":{}}`,
 		noDB:        true,
 		handler: func(_ *sql.DB, _ json.RawMessage) (any, error) {
-			if runtime.GOOS != "darwin" {
-				return nil, fmt.Errorf("setup is currently only supported on macOS")
-			}
 			return setupStatusReport(), nil
+		},
+	},
+	{
+		name: "whatsapp_sync_status",
+		description: "Check whether the local WhatsApp copy is up to date, and optionally wait until it is. " +
+			"CALL THIS FIRST before summarising or reporting on a period of time (\"what did I miss today\", " +
+			"\"catch me up\", a scheduled daily summary). This computer is not always on: while it is off, " +
+			"WhatsApp holds the messages and pushes them when it comes back, which takes time. Messages read " +
+			"before that finishes are only part of the period, and nothing in the results themselves would " +
+			"reveal that. By default this waits until the copy is up to date, then returns; it returns " +
+			"immediately when it already is.",
+		inputSchema: `{"type":"object","properties":{
+			"wait":{"type":"boolean","description":"Wait until the local copy is up to date (default true). Pass false for an immediate answer."},
+			"timeout_seconds":{"type":"integer","description":"How long to wait at most, in seconds (default 60, maximum 300). On timeout it returns anyway, saying what is still outstanding — call it again to keep waiting."},
+			"transcript_window_hours":{"type":"integer","description":"How far back to care about voice notes still being transcribed (default 24). Voice notes older than this are ignored because their media may have expired and can never be transcribed."}
+		}}`,
+		noDB: true,
+		handler: func(_ *sql.DB, args json.RawMessage) (any, error) {
+			p := struct {
+				Wait                  *bool `json:"wait"`
+				TimeoutSeconds        int   `json:"timeout_seconds"`
+				TranscriptWindowHours int   `json:"transcript_window_hours"`
+			}{}
+			if len(args) > 0 {
+				if err := json.Unmarshal(args, &p); err != nil {
+					return nil, err
+				}
+			}
+			wait := p.Wait == nil || *p.Wait
+			// This server handles requests serially, so a wait blocks every
+			// other WhatsApp tool for its duration — and MCP clients commonly
+			// abandon a tool call after about a minute, which would turn a
+			// useful "still catching up" answer into a bare timeout error.
+			// Better to return honestly and let the caller ask again.
+			timeout := time.Duration(p.TimeoutSeconds) * time.Second
+			if p.TimeoutSeconds <= 0 {
+				timeout = 60 * time.Second
+			}
+			if timeout > 5*time.Minute {
+				timeout = 5 * time.Minute
+			}
+			window := time.Duration(p.TranscriptWindowHours) * time.Hour
+			if p.TranscriptWindowHours <= 0 {
+				window = 24 * time.Hour
+			}
+			return syncStatusReport(wait, timeout, window), nil
 		},
 	},
 	{

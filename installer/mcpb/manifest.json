@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "whatsapp-assistant",
   "display_name": "WhatsApp Assistant",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "Read-only WhatsApp access for Claude: search chats, read messages, get summaries and insights. Cannot send messages.",
   "long_description": "Gives Claude read-only access to your WhatsApp messages via a local background service. On first use, ask Claude to check your WhatsApp status — it will set everything up and show a QR code to scan with your phone. Your messages stay on your computer. This extension has no ability to send messages, only read them.",
   "author": {
@@ -13,22 +13,69 @@
     "entry_point": "server/whatsapp-assistant",
     "mcp_config": {
       "command": "${__dirname}/server/whatsapp-assistant",
-      "args": ["mcp"]
+      "args": [
+        "mcp"
+      ]
+    },
+    "platform_overrides": {
+      "win32": {
+        "command": "${__dirname}/server/whatsapp-assistant.exe",
+        "args": [
+          "mcp"
+        ]
+      }
     }
   },
   "tools": [
-    { "name": "whatsapp_status", "description": "Check and repair the WhatsApp setup; shows pairing QR when needed" },
-    { "name": "search_contacts", "description": "Search contacts by name or phone number" },
-    { "name": "list_messages", "description": "Read messages with filters and context" },
-    { "name": "list_chats", "description": "List chats sorted by activity" },
-    { "name": "get_chat", "description": "Get chat metadata by JID" },
-    { "name": "get_direct_chat_by_contact", "description": "Find a direct chat by phone number" },
-    { "name": "get_contact_chats", "description": "List all chats involving a contact" },
-    { "name": "get_last_interaction", "description": "Most recent message with a contact" },
-    { "name": "get_message_context", "description": "Messages around a specific message" },
-    { "name": "download_media", "description": "Download media from a message to a local file" }
+    {
+      "name": "whatsapp_status",
+      "description": "Check and repair the WhatsApp setup; shows pairing QR when needed"
+    },
+    {
+      "name": "whatsapp_sync_status",
+      "description": "Check whether the local copy has caught up with WhatsApp; wait until it has"
+    },
+    {
+      "name": "search_contacts",
+      "description": "Search contacts by name or phone number"
+    },
+    {
+      "name": "list_messages",
+      "description": "Read messages with filters and context"
+    },
+    {
+      "name": "list_chats",
+      "description": "List chats sorted by activity"
+    },
+    {
+      "name": "get_chat",
+      "description": "Get chat metadata by JID"
+    },
+    {
+      "name": "get_direct_chat_by_contact",
+      "description": "Find a direct chat by phone number"
+    },
+    {
+      "name": "get_contact_chats",
+      "description": "List all chats involving a contact"
+    },
+    {
+      "name": "get_last_interaction",
+      "description": "Most recent message with a contact"
+    },
+    {
+      "name": "get_message_context",
+      "description": "Messages around a specific message"
+    },
+    {
+      "name": "download_media",
+      "description": "Download media from a message to a local file"
+    }
   ],
   "compatibility": {
-    "platforms": ["darwin"]
+    "platforms": [
+      "darwin",
+      "win32"
+    ]
   }
 }
