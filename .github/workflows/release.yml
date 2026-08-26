@@ -77,9 +77,9 @@ jobs:
         run: |
           version="$(grep -o 'appVersion = "[^"]*"' whatsapp-bridge/main.go | cut -d'"' -f2)"
           case "${{ inputs.platform }}" in
-            both)    file="installer/WhatsApp Assistant.mcpb" ;;
-            windows) file="installer/WhatsApp Assistant (Windows).mcpb" ;;
-            macos)   file="installer/WhatsApp Assistant (macOS).mcpb" ;;
+            both)    file="installer/WhatsApp-Assistant-Windows-x64-and-macOS-AppleSilicon.mcpb" ;;
+            windows) file="installer/WhatsApp-Assistant-Windows-x64.mcpb" ;;
+            macos)   file="installer/WhatsApp-Assistant-macOS-AppleSilicon.mcpb" ;;
           esac
           [ -f "$file" ] || { echo "::error::expected package not found: $file"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -98,17 +98,35 @@ jobs:
           # YAML block scalar every line has to stay indented, and indented
           # lines would reach Markdown as code blocks.
           {
+            echo "### Which file do I need?"
+            echo
+            echo "| Your computer | Download |"
+            echo "| --- | --- |"
+            echo "| **Windows 10 or 11**, 64-bit | \`WhatsApp-Assistant-Windows-x64.mcpb\` |"
+            echo "| **Mac with an Apple chip** (M1/M2/M3/M4) | \`WhatsApp-Assistant-macOS-AppleSilicon.mcpb\` |"
+            echo
+            echo "Not supported: Intel Macs, 32-bit Windows, and Windows on ARM."
+            echo "(The extension manifest says \`win32\`, which is the platform name Claude uses for Windows generally — not a 32-bit build.)"
+            echo
+            echo "### Install"
+            echo
+            echo "Download the file for your computer, then in Claude open **Settings -> Extensions** and drag it in. Start a new chat and say *check my whatsapp status*."
+            echo
+            echo "Updating from an earlier version? Install over the top. Your messages and your WhatsApp link are kept, and the background service updates itself."
+            echo
+            echo "First run downloads a 1.5 GB speech model in the background, once, so voice notes can be transcribed on your own machine."
+            echo
+            echo "Full guides: [Windows]($REPO_URL/blob/main/installer/README-windows.md) | [macOS]($REPO_URL/blob/main/installer/README.md)"
+            echo
+            echo "---"
             echo "Built from \`${{ inputs.ref }}\` (\`$sha\`)."
-            echo
-            echo "**Install:** download the \`.mcpb\` below, then in Claude open **Settings -> Extensions** and drag the file in."
-            echo
-            echo "Setup guides: [Windows]($REPO_URL/blob/main/installer/README-windows.md) | [macOS]($REPO_URL/blob/main/installer/README.md)"
           } > "$RUNNER_TEMP/notes.md"
 
           # Re-running for a second platform must add to the existing release
           # rather than replace it, so create only when the tag is new.
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG exists; adding or replacing this asset."
+            echo "Release $TAG exists; refreshing its notes and adding this asset."
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
           else
             gh release create "$TAG" \
               --target "$(git rev-parse HEAD)" \

@@ -33,7 +33,7 @@ the top line:
 
 ## Installing (about two minutes)
 
-**1. Double-click `WhatsApp Assistant.mcpb`.**
+**1. Double-click `WhatsApp-Assistant-macOS-AppleSilicon.mcpb`.**
 
 Claude opens and asks whether you want to install the extension. Click
 **Install**.
