@@ -38,6 +38,10 @@ the top line:
 Claude opens and asks whether you want to install the extension. Click
 **Install**.
 
+> If nothing happens, open Claude and go to **Settings → Extensions → Advanced
+> settings → "Install Extension…"**, then pick the file. Dragging it into a
+> chat does **not** work — that just attaches the file to the conversation.
+
 > If macOS says the file is from an unidentified developer, right-click the file
 > instead and choose **Open**, then confirm.
 
@@ -123,8 +127,12 @@ If you want to know whether Claude is seeing everything from today, ask:
 
 > is my whatsapp up to date?
 
-If Claude says it has no WhatsApp tools at all, quit the Claude app completely
-(**Claude → Quit**, not just closing the window) and reopen it.
+If Claude says it has no WhatsApp tools at all, go to **Settings → Extensions**
+and switch WhatsApp Assistant **off and then on again**. Claude only reads the
+list of tools when it starts, so that switch makes it look again.
+
+If that does not help, quit the Claude app completely (**Claude → Quit**, not
+just closing the window) and reopen it.
 
 ---
 

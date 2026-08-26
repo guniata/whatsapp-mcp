@@ -110,7 +110,11 @@ jobs:
             echo
             echo "### Install"
             echo
-            echo "Download the file for your computer, then in Claude open **Settings -> Extensions** and drag it in. Start a new chat and say *check my whatsapp status*."
+            echo "Download the file for your computer, then in Claude go to **Settings -> Extensions -> Advanced settings -> Install Extension...** and pick it. Double-clicking the file usually works too."
+            echo
+            echo "Dragging the file into a chat does *not* install it — that only attaches it to the conversation."
+            echo
+            echo "Then start a new chat and say *check my whatsapp status*. If the WhatsApp tools do not appear, switch the extension off and on again in **Settings -> Extensions**; Claude reads the tool list only at startup."
             echo
             echo "Updating from an earlier version? Install over the top. Your messages and your WhatsApp link are kept, and the background service updates itself."
             echo
