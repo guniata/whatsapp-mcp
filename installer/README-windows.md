@@ -24,8 +24,12 @@ can be switched on.
 
 ## Installing (about two minutes)
 
-**1. Open Claude, go to Settings → Extensions,** and drag
-`WhatsApp-Assistant-Windows-x64.mcpb` onto that window. Click **Install**.
+**1. In Claude, go to Settings → Extensions → Advanced settings →
+"Install Extension…"** and pick the file you downloaded,
+`WhatsApp-Assistant-Windows-x64.mcpb`. Click **Install**.
+
+> Double-clicking the file in File Explorer usually works too. Dragging it
+> into a chat does **not** — that just attaches the file to the conversation.
 
 **2. Start a new chat and type:**
 
@@ -117,9 +121,12 @@ If you want to know whether Claude is seeing everything from today, ask:
 
 > is my whatsapp up to date?
 
-If Claude says it has no WhatsApp tools at all, quit the Claude app completely
-(right-click its icon in the system tray → **Quit**, not just closing the
-window) and reopen it.
+If Claude says it has no WhatsApp tools at all, go to **Settings → Extensions**
+and switch WhatsApp Assistant **off and then on again**. Claude only reads the
+list of tools when it starts, so that switch makes it look again.
+
+If that does not help, quit the Claude app completely (right-click its icon in
+the system tray → **Quit**, not just closing the window) and reopen it.
 
 ---
 
