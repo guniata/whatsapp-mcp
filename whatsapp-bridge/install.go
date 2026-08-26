@@ -246,6 +246,17 @@ func ensureBridgeService() (string, error) {
 			stopService()
 			if err := replaceFile(staged, installedBinPath()); err != nil {
 				os.Remove(staged)
+				// The usual cause on Windows: the previous bridge is still
+				// running and holding the file, and stopping it failed because
+				// the task belongs to an elevated session this process cannot
+				// control. Nothing about "failed to install binary" would tell
+				// anyone that.
+				if bridgeRunning() {
+					return "", fmt.Errorf(
+						"cannot update the sync program at %s because the previous version is still running. "+
+							"Close Claude completely, then either end the WhatsAppAssistantBridge task in Task Scheduler "+
+							"or sign out and back in, and try again. (%v)", installedBinPath(), err)
+				}
 				return "", fmt.Errorf("failed to install binary: %v", err)
 			}
 			binaryChanged = true
