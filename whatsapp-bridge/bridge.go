@@ -571,11 +571,6 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 }
 
 func runBridge() {
-	// The service manager may not capture stdout (Windows Task Scheduler does
-	// not), so the bridge takes responsibility for its own log file where that
-	// is the case. No-op where the service manager already redirects.
-	redirectBridgeOutput()
-
 	// Set up logger
 	logger := waLog.Stdout("Client", "INFO", true)
 	logger.Infof("Starting WhatsApp client...")
@@ -614,6 +609,16 @@ func runBridge() {
 		logger.Errorf("Failed to create WhatsApp client")
 		return
 	}
+
+	// Only one bridge per store. It can be started by the service manager or
+	// spawned directly, and two of them would write the same SQLite file while
+	// both driving the same WhatsApp session.
+	release, err := claimBridgeLock()
+	if err != nil {
+		logger.Errorf("Another bridge is already running for %s; exiting.", appHome())
+		return
+	}
+	defer release()
 
 	// Initialize message store
 	messageStore, err := NewMessageStore()

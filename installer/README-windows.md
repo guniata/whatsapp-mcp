@@ -114,6 +114,15 @@ Almost everything is fixed by asking Claude:
 
 > check my whatsapp status
 
+It now tells you which part is not working rather than just asking you to try
+again, so paste what it says if you need help.
+
+**"Starts at login: NO"** means Windows would not let it register the task that
+starts the sync in the background. Everything still works while Claude is open —
+it just will not collect messages when Claude is closed. To fix it, close Claude,
+right-click the Claude icon, choose **Run as administrator**, and ask *check my
+whatsapp status* once. After that you can go back to opening Claude normally.
+
 That command repairs the background service, tells you whether your account is
 still linked, and shows you a fresh QR code if it isn't.
 

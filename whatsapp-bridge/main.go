@@ -22,7 +22,7 @@ import (
 // self-install compares it against the already-installed binary so that an
 // older copy — an out-of-date Claude extension, say — never overwrites a newer
 // background service.
-const appVersion = "1.4.0"
+const appVersion = "1.4.1"
 
 // runningAsService is set when the bridge was started by the platform service
 // manager rather than by hand. Only then does it take over its own console and
@@ -72,6 +72,10 @@ func main() {
 	switch mode {
 	case "bridge":
 		parseBridgeArgs(modeArgs(os.Args))
+		// Before anything else, including anything that can fail: a bridge that
+		// dies during startup is invisible otherwise, which is exactly when
+		// knowing why matters most.
+		startBridgeLog()
 		runBridge()
 	case "mcp":
 		runMCP()

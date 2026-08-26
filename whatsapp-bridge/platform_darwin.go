@@ -4,6 +4,7 @@ package main
 // locking, and where the speech engine lives.
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,12 +17,40 @@ func openFile(path string) {
 	exec.Command("open", path).Start()
 }
 
-// redirectBridgeOutput is a no-op here: launchd already redirects the agent's
-// stdout and stderr to the log files named in the plist.
-func redirectBridgeOutput() {}
+// takeOverConsole is a no-op here: launchd already redirects the agent's stdout
+// and stderr to the log files named in the plist, so the bridge writing to them
+// as well would only double every line.
+func takeOverConsole(*os.File) {}
 
 func lockFileExclusive(f *os.File) error {
 	return syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
+}
+
+// tryLockFileExclusive fails immediately rather than waiting, which is what the
+// single-instance check needs: "is someone else holding this" and not "let me
+// have it when they are done".
+func tryLockFileExclusive(f *os.File) error {
+	return syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+}
+
+// spawnBridgeDetached starts the bridge as an independent process that outlives
+// this one. launchd normally does this, but the bridge must also be startable
+// directly when registering the service is not possible.
+func spawnBridgeDetached() error {
+	cmd := exec.Command(installedBinPath(), bridgeArgs()...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	return cmd.Start()
+}
+
+// serviceDiagnostics returns whatever the platform can say about the service,
+// verbatim. It is read by Claude rather than parsed, so raw output is fine and
+// is safer than pattern-matching text that varies by OS version and language.
+func serviceDiagnostics() string {
+	out, err := exec.Command("launchctl", "print", launchdDomain()+"/"+launchdLabel).CombinedOutput()
+	if err != nil && len(out) == 0 {
+		return fmt.Sprintf("launchctl print failed: %v", err)
+	}
+	return string(out)
 }
 
 func unlockFile(f *os.File) {

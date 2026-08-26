@@ -4,11 +4,12 @@ package main
 // locking, the bridge's own log handling, and where the speech engine lives.
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"time"
+	"syscall"
 
 	"golang.org/x/sys/windows"
 )
@@ -20,44 +21,20 @@ func openFile(path string) {
 	exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", path).Start()
 }
 
-// redirectBridgeOutput points the bridge's output at its log file and hides the
+// takeOverConsole points the bridge's output at its log file and hides the
 // console window. Task Scheduler, unlike launchd, captures neither stdout nor
 // stderr, so without this every log line the bridge writes is discarded.
 //
-// It only acts when started by the service (bridge --service). Run by hand from
-// a terminal, the bridge keeps printing to that terminal — hiding the console
-// there would hide the user's own window.
-func redirectBridgeOutput() {
+// Only when started by the service (bridge --service). Run by hand from a
+// terminal the bridge keeps printing there — hiding that window would hide the
+// user's own, and redirecting would swallow the output they asked for.
+func takeOverConsole(f *os.File) {
 	if !runningAsService {
 		return
 	}
 	hideConsoleWindow()
-	if err := os.MkdirAll(logsDir(), 0755); err != nil {
-		return
-	}
-	// Append, so that when the service restarts after a crash the log still
-	// holds the crash. That log is the only diagnostic channel there is on a
-	// non-technical user's PC. Rotated by size rather than truncated on every
-	// start, so it cannot grow without bound either.
-	rotateIfLarge(bridgeLogPath(), 5<<20)
-	f, err := os.OpenFile(bridgeLogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return
-	}
 	os.Stdout = f
 	os.Stderr = f
-	fmt.Fprintf(f, "\n=== bridge started %s ===\n", time.Now().Format(time.RFC3339))
-}
-
-// rotateIfLarge keeps one previous log alongside the current one, so a restart
-// loop cannot bury the first failure and the pair cannot exceed twice maxBytes.
-func rotateIfLarge(path string, maxBytes int64) {
-	st, err := os.Stat(path)
-	if err != nil || st.Size() < maxBytes {
-		return
-	}
-	os.Remove(path + ".1")
-	os.Rename(path, path+".1")
 }
 
 // GetConsoleWindow lives in kernel32 and ShowWindow in user32; neither is
@@ -93,6 +70,52 @@ func lockFileExclusive(f *os.File) error {
 		^uint32(0), ^uint32(0), // lock every byte
 		&overlapped,
 	)
+}
+
+// tryLockFileExclusive fails immediately rather than waiting, which is what the
+// single-instance check needs: "is someone else holding this" and not "let me
+// have it when they are done".
+func tryLockFileExclusive(f *os.File) error {
+	var overlapped windows.Overlapped
+	return windows.LockFileEx(
+		windows.Handle(f.Fd()),
+		windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
+		0,
+		^uint32(0), ^uint32(0),
+		&overlapped,
+	)
+}
+
+// spawnBridgeDetached starts the bridge as an independent process that outlives
+// this one.
+//
+// This is the path that does not need a Scheduled Task, and therefore does not
+// need administrator rights. Registering a task can fail on a locked-down
+// machine; the bridge still has to start, or nothing works at all.
+//
+// DETACHED_PROCESS gives it no console to inherit, and CREATE_NEW_PROCESS_GROUP
+// keeps a Ctrl-C in whatever started Claude from reaching it.
+func spawnBridgeDetached() error {
+	cmd := exec.Command(installedBinPath(), bridgeArgs()...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP,
+	}
+	return cmd.Start()
+}
+
+// serviceDiagnostics returns what Task Scheduler says about the task, verbatim,
+// including its last run time and last result code.
+//
+// Deliberately unparsed: schtasks output is localised, so matching on its text
+// would work on an English Windows and quietly fail on any other. It is read by
+// Claude, which can interpret it in whatever language it comes back in.
+func serviceDiagnostics() string {
+	out, err := exec.Command("schtasks", "/Query", "/TN", taskName, "/V", "/FO", "LIST").CombinedOutput()
+	if err != nil && len(bytes.TrimSpace(out)) == 0 {
+		return fmt.Sprintf("schtasks query failed: %v", err)
+	}
+	return string(out)
 }
 
 func unlockFile(f *os.File) {
