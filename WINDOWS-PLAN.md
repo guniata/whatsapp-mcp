@@ -254,6 +254,40 @@ are gone rather than late. Both setup guides say so.
 - **Do not bundle the whole release.** It also carries `SDL2.dll`, `llama.dll`
   and `parakeet.dll` for its other tools — about 5 MB `whisper-cli` never opens.
 
+## Found on the first real Windows install (v1.4.1)
+
+- **`schtasks /Create` is refused without elevation** on a stock Windows 11.
+  Registering a per-user task in the root folder is not the reliably
+  unprivileged operation it looks like. The bridge therefore no longer *depends*
+  on the task: it is spawned directly (DETACHED_PROCESS) when the task cannot be
+  registered or does not start it, and the task is now only what makes it start
+  at login. Losing the task degrades the product; it no longer breaks it.
+- **Never derive "running" from "registered".** The old code reported
+  "background service already installed and running" whenever the task existed,
+  while no process had ever started and no store had ever been created — and
+  `whatsapp_sync_status`, reading a different source, correctly said the store
+  did not exist. Status is now measured: task registered / process holding the
+  lock / store present / heartbeat fresh / account linked, each reported
+  separately.
+- **`bridgeDefinitelyDead()` returned false when the store was missing**, which
+  is precisely the never-started case. So nothing ever retried the start, and
+  nothing ever reported a problem. Replaced by a lock-file check of the actual
+  process.
+- **A launch command returning success is not a started process.**
+  `schtasks /Run` reports success once it has *asked* for the task to run.
+  Starting now waits for the bridge to prove it is alive.
+- **Two ways to start means a single-instance lock is mandatory** — two bridges
+  on one store would drive the same WhatsApp session.
+- **Open the log before anything that can fail.** The first failure left no log
+  at all, because logging started inside `runBridge` and only for a service
+  start. It now happens in `main()` for every bridge start, and records the
+  resolved paths before any work.
+- **Do not swallow a timeout.** Twenty seconds of waiting followed by "try again
+  in ~30 seconds" is an infinite loop with no new information in it. A failed
+  setup now returns the bridge log tail and the raw service-manager output.
+- **Do not parse `schtasks` output** — it is localised. Hand it to Claude
+  verbatim instead.
+
 ## Still open — needs the real PC
 
 1. **The whole verification checklist above.** None of it has been run.
