@@ -13,7 +13,9 @@ can be switched on.
 
 ## What you need first
 
-- A **Windows 10 or 11** PC (64-bit — almost every PC sold in the last decade)
+- A **Windows 10 or 11** PC with a **64-bit** processor — almost every PC sold
+  in the last decade. (If you ever see `win32` written down, that is just the
+  name Claude uses for Windows in general; it does not mean 32-bit.)
 - The **Claude** app installed and signed in — download it from
   [claude.ai/download](https://claude.ai/download) if you don't have it
 - Your phone with WhatsApp on it, nearby
@@ -23,7 +25,7 @@ can be switched on.
 ## Installing (about two minutes)
 
 **1. Open Claude, go to Settings → Extensions,** and drag
-`WhatsApp Assistant.mcpb` onto that window. Click **Install**.
+`WhatsApp-Assistant-Windows-x64.mcpb` onto that window. Click **Install**.
 
 **2. Start a new chat and type:**
 

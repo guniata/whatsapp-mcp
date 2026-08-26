@@ -100,10 +100,19 @@ case "$TARGETS" in
   windows|both) [ -f "$STAGE/server/whisper-cli.exe" ] || echo "note: no Windows speech engine bundled (installer/bundle-whisper-windows.sh)" ;;
 esac
 
+# The file name has to answer "is this the one for my computer?" on its own,
+# because that is the only thing a person sees on a downloads page. Note that
+# the manifest's "win32" is a platform identifier, not an architecture — the
+# binary inside is x64 — which is exactly the confusion the name has to avoid.
+case "$DARWIN_ARCH" in
+  arm64) MAC_LABEL="macOS-AppleSilicon" ;;
+  amd64) MAC_LABEL="macOS-Intel" ;;
+  *)     MAC_LABEL="macOS-$DARWIN_ARCH" ;;
+esac
 case "$TARGETS" in
-  both)    NAME="WhatsApp Assistant.mcpb" ;;
-  windows) NAME="WhatsApp Assistant (Windows).mcpb" ;;
-  darwin)  NAME="WhatsApp Assistant (macOS).mcpb" ;;
+  both)    NAME="WhatsApp-Assistant-Windows-x64-and-$MAC_LABEL.mcpb" ;;
+  windows) NAME="WhatsApp-Assistant-Windows-x64.mcpb" ;;
+  darwin)  NAME="WhatsApp-Assistant-$MAC_LABEL.mcpb" ;;
 esac
 OUT="$ROOT/installer/$NAME"
 rm -f "$OUT"
