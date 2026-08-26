@@ -29,7 +29,12 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # macOS, not Linux. There is no Linux build of this: the platform files
+    # cover darwin and windows only, so `go test ./...` on a Linux runner fails
+    # to compile before it runs anything. Tests have to execute somewhere they
+    # are supported, and macOS is one of the two shipping targets. Windows is
+    # covered by cross-compiling `go vet` from here.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,9 +57,9 @@ jobs:
 
       - name: Build the package
         env:
-          # The runner is linux/amd64, so the script's "follow the host" default
-          # would quietly produce an Intel macOS binary. The extension targets
-          # Apple silicon.
+          # Pinned rather than left to follow the host: the extension targets
+          # Apple silicon, and this should not silently become an Intel build if
+          # the runner image ever changes architecture.
           DARWIN_ARCH: arm64
         run: |
           case "${{ inputs.platform }}" in
